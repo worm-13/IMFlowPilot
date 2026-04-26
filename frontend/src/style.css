@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    color: #0f172a;
+    background-color: #f1f5f9;
+}
+
+#app {
+    height: 100%;
+}

@@ -1,0 +1,1 @@
+{"root":["./src/main.ts","./src/services/websocket.ts","./src/stores/chatstore.ts","./src/app.vue","./src/components/chatwindow.vue","./src/components/messageinput.vue","./src/components/messageitem.vue"],"version":"5.9.3"}
