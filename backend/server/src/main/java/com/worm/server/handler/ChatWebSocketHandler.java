@@ -5,6 +5,8 @@ import java.io.IOException;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.worm.server.client.AgentClient;
+import com.worm.server.dto.AgentResponse;
 import com.worm.server.model.ChatMessage;
 import com.worm.server.service.SessionManager;
 
@@ -23,10 +25,13 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private final SessionManager sessionManager;
     private final ObjectMapper objectMapper;
+    private final AgentClient agentClient;
 
-    public ChatWebSocketHandler(SessionManager sessionManager, ObjectMapper objectMapper) {
+    public ChatWebSocketHandler(SessionManager sessionManager, ObjectMapper objectMapper,
+                                AgentClient agentClient) {
         this.sessionManager = sessionManager;
         this.objectMapper = objectMapper;
+        this.agentClient = agentClient;
     }
 
     @Override
@@ -57,8 +62,43 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
             String outboundJson = objectMapper.writeValueAsString(chatMessage);
             sessionManager.broadcast(outboundJson);
+
+            agentClient.process(chatMessage.getContent())
+                    .thenAccept(response -> handleAgentResponse(response, chatMessage))
+                    .exceptionally(ex -> {
+                        logger.error("Agent async processing failed", ex);
+                        return null;
+                    });
         } catch (JsonProcessingException ex) {
             logger.warn("Invalid chat message payload from session {}: {}", session.getId(), message.getPayload(), ex);
+        }
+    }
+
+    private void handleAgentResponse(AgentResponse response, ChatMessage originalMessage) {
+        if (response == null || response.isIgnore()) {
+            return;
+        }
+
+        ChatMessage agentMessage = new ChatMessage();
+        agentMessage.setId(UUID.randomUUID().toString());
+        agentMessage.setSender("agent");
+        agentMessage.setTimestamp(System.currentTimeMillis());
+        agentMessage.setAgentType(response.getType());
+
+        if (response.isSuggestion()) {
+            agentMessage.setContent(response.getContent());
+        } else if (response.isTask()) {
+            agentMessage.setContent("收到任务指令，正在处理: " + response.getContent());
+        } else {
+            return;
+        }
+
+        try {
+            String agentJson = objectMapper.writeValueAsString(agentMessage);
+            sessionManager.broadcast(agentJson);
+            logger.info("Agent message broadcast: type={}, content={}", response.getType(), agentMessage.getContent());
+        } catch (JsonProcessingException ex) {
+            logger.error("Failed to serialize agent message", ex);
         }
     }
 

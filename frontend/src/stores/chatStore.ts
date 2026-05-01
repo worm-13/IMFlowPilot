@@ -1,13 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
-export type ChatSender = 'user' | 'other'
+export type ChatSender = 'user' | 'other' | 'agent'
 
 export interface ChatMessage {
     id: string
     sender: ChatSender
     content: string
     timestamp: number
+    agentType?: string
 }
 
 export const useChatStore = defineStore('chat', () => {

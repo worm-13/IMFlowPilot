@@ -1,6 +1,8 @@
 spring:
-  autoconfigure:
-    exclude:
-      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+  datasource:
+    url: jdbc:mysql://localhost:3306/im_agent_demo
+    username: root
+    password: wormQAQ13
+    driver-class-name: com.mysql.cj.jdbc.Driver
 
 

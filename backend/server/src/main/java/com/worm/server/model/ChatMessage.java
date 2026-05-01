@@ -6,6 +6,7 @@ public class ChatMessage {
     private String sender;
     private String content;
     private Long timestamp;
+    private String agentType;
 
     public String getId() {
         return id;
@@ -39,9 +40,21 @@ public class ChatMessage {
         this.timestamp = timestamp;
     }
 
+    public String getAgentType() {
+        return agentType;
+    }
+
+    public void setAgentType(String agentType) {
+        this.agentType = agentType;
+    }
+
     public boolean isValid() {
         return sender != null && !sender.isBlank()
                 && content != null && !content.isBlank();
+    }
+
+    public boolean isAgentMessage() {
+        return agentType != null && !agentType.isBlank();
     }
 }
 
