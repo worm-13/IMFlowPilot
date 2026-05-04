@@ -7,7 +7,17 @@
       <div v-if="isAgent" class="mb-1 flex items-center gap-1">
         <span class="text-xs font-semibold" :class="agentLabelClass">🤖 Agent · {{ agentTypeLabel }}</span>
       </div>
-      <p class="whitespace-pre-wrap break-words text-[15px] leading-relaxed">{{ message.content }}</p>
+      <div v-if="message.mentions && message.mentions.length > 0 && !isAgent" class="mb-1 flex flex-wrap gap-1">
+        <span
+          v-for="m in message.mentions"
+          :key="m"
+          class="inline-flex items-center gap-0.5 rounded-md bg-indigo-100 px-1.5 py-0.5 text-xs font-medium text-indigo-600"
+        >
+          @{{ m }}
+        </span>
+      </div>
+      <p class="whitespace-pre-wrap break-words text-[15px] leading-relaxed" v-html="renderedContent"></p>
+      <PlanProgress v-if="showProgress" :steps="message.steps!" />
       <p class="mt-1 text-right text-xs" :class="timeClass">{{ formattedTime }}</p>
     </div>
   </div>
@@ -16,13 +26,29 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ChatMessage } from '../stores/chatStore'
+import PlanProgress from './PlanProgress.vue'
 
 const props = defineProps<{
   message: ChatMessage
 }>()
 
+const MENTION_RENDER_REGEX = /(@\S+)/g
+
 const isUser = computed(() => props.message.sender === 'user')
 const isAgent = computed(() => props.message.sender === 'agent')
+const showProgress = computed(() =>
+  isAgent.value &&
+  props.message.steps &&
+  props.message.steps.length > 0 &&
+  (props.message.agentType === 'plan' || props.message.agentType === 'progress')
+)
+
+const renderedContent = computed(() => {
+  return props.message.content.replace(
+    MENTION_RENDER_REGEX,
+    '<span class="font-medium text-indigo-600">$1</span>'
+  )
+})
 
 const alignmentClass = computed(() => {
   return isUser.value ? 'justify-end' : 'justify-start'

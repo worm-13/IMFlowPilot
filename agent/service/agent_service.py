@@ -4,6 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTempla
 from langchain_core.output_parsers import StrOutputParser
 
 from config.llm import get_llm
+from config.redis import get_chat_history, MAX_HISTORY_ROUNDS
 from model.response import AgentResponse
 from prompt.agent_prompt import SYSTEM_PROMPT, HUMAN_TEMPLATE
 
@@ -24,16 +25,85 @@ class AgentService:
         chain = prompt | self.llm | StrOutputParser()
         return chain
 
-    async def process(self, message: str) -> AgentResponse:
+    async def process(self, message: str, session_id: str = "", mentions: list[str] | None = None) -> AgentResponse:
         try:
-            raw_output = await self.chain.ainvoke({"message": message})
+            mentions_text = self._format_mentions(mentions)
+            history_text = self._load_history(session_id)
+
+            raw_output = await self.chain.ainvoke({"message": message, "history": history_text, "mentions": mentions_text})
             logger.info(f"LLM raw output: {raw_output}")
 
             parsed = self._parse_json(raw_output)
-            return AgentResponse.from_dict(parsed)
+            result = AgentResponse.from_dict(parsed)
+
+            self._save_history(session_id, message, result, mentions)
+
+            return result
         except Exception as e:
             logger.error(f"Agent processing failed: {e}")
             return self._fallback()
+
+    def _format_mentions(self, mentions: list[str] | None) -> str:
+        if not mentions:
+            return "(none)"
+        return ", ".join(mentions)
+
+    def _load_history(self, session_id: str) -> str:
+        if not session_id:
+            return "(none)"
+
+        try:
+            history = get_chat_history(session_id)
+            if history is None:
+                return "(none)"
+
+            messages = history.messages
+            if not messages:
+                return "(none)"
+
+            recent = messages[-(MAX_HISTORY_ROUNDS * 2):]
+            pairs = []
+            for msg in recent:
+                role = "Human" if msg.type == "human" else "AI"
+                content = msg.content
+                if role == "AI" and content.startswith("{"):
+                    try:
+                        parsed = json.loads(content)
+                        t = parsed.get("type", "")
+                        c = parsed.get("content", "")
+                        if t == "task":
+                            content = f"[classified as task: {c}]"
+                        elif t == "suggestion":
+                            content = f"[suggestion: {c}]"
+                        elif t == "ignore":
+                            content = "[ignored as casual chat]"
+                    except json.JSONDecodeError:
+                        pass
+                pairs.append(f"{role}: {content}")
+
+            result = "\n".join(pairs)
+            logger.info(f"Loaded {len(recent)} messages from history for session {session_id}")
+            return result
+        except Exception as e:
+            logger.warning(f"Failed to load history for session {session_id}: {e}")
+            return "(none)"
+
+    def _save_history(self, session_id: str, message: str, response: AgentResponse, mentions: list[str] | None = None) -> None:
+        if not session_id:
+            return
+
+        try:
+            history = get_chat_history(session_id)
+            if history is None:
+                return
+
+            tag = ""
+            if mentions:
+                tag = f"[@{', '.join(mentions)}] "
+            history.add_user_message(f"{tag}{message}")
+            history.add_ai_message(json.dumps(response.to_dict(), ensure_ascii=False))
+        except Exception as e:
+            logger.warning(f"Failed to save history for session {session_id}: {e}")
 
     def _parse_json(self, raw: str) -> dict:
         raw = raw.strip()
@@ -66,7 +136,7 @@ class AgentService:
         if "type" not in data:
             raise ValueError("Missing 'type' field in response")
 
-        valid_types = {"ignore", "suggestion", "task"}
+        valid_types = {"ignore", "mention", "suggestion", "task"}
         if data["type"] not in valid_types:
             data["type"] = "ignore"
 

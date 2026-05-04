@@ -2,11 +2,14 @@ package com.worm.server.handler;
 
 import java.util.UUID;
 import java.io.IOException;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.worm.server.client.AgentClient;
 import com.worm.server.dto.AgentResponse;
+import com.worm.server.dto.PlanResponse;
 import com.worm.server.model.ChatMessage;
 import com.worm.server.service.SessionManager;
 
@@ -27,8 +30,10 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private final ObjectMapper objectMapper;
     private final AgentClient agentClient;
 
+    private final ConcurrentHashMap<String, String> agentSessionMap = new ConcurrentHashMap<>();
+
     public ChatWebSocketHandler(SessionManager sessionManager, ObjectMapper objectMapper,
-                                AgentClient agentClient) {
+            AgentClient agentClient) {
         this.sessionManager = sessionManager;
         this.objectMapper = objectMapper;
         this.agentClient = agentClient;
@@ -37,7 +42,9 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         sessionManager.addSession(session);
-        logger.info("WebSocket connected: sessionId={}", session.getId());
+        String agentSessionId = UUID.randomUUID().toString();
+        agentSessionMap.put(session.getId(), agentSessionId);
+        logger.info("WebSocket connected: sessionId={}, agentSessionId={}", session.getId(), agentSessionId);
     }
 
     @Override
@@ -57,25 +64,34 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 return;
             }
 
-            logger.info("Incoming message: sessionId={}, sender={}, content={}",
-                    session.getId(), chatMessage.getSender(), chatMessage.getContent());
+            logger.info("Incoming message: sessionId={}, sender={}, content={}, mentions={}",
+                    session.getId(), chatMessage.getSender(), chatMessage.getContent(), chatMessage.getMentions());
 
             String outboundJson = objectMapper.writeValueAsString(chatMessage);
             sessionManager.broadcast(outboundJson);
 
-            agentClient.process(chatMessage.getContent())
-                    .thenAccept(response -> handleAgentResponse(response, chatMessage))
-                    .exceptionally(ex -> {
-                        logger.error("Agent async processing failed", ex);
-                        return null;
-                    });
+            String agentSessionId = agentSessionMap.get(session.getId());
+
+            List<String> mentions = chatMessage.getMentions();
+            boolean shouldCallAgent = (mentions == null || mentions.isEmpty() || mentions.contains("agent"));
+
+            if (shouldCallAgent) {
+                agentClient.process(chatMessage.getContent(), agentSessionId, mentions)
+                        .thenAccept(response -> handleAgentResponse(response, chatMessage, agentSessionId))
+                        .exceptionally(ex -> {
+                            logger.error("Agent async processing failed", ex);
+                            return null;
+                        });
+            } else {
+                logger.info("Message directed to others (mentions={}), skipping agent", mentions);
+            }
         } catch (JsonProcessingException ex) {
             logger.warn("Invalid chat message payload from session {}: {}", session.getId(), message.getPayload(), ex);
         }
     }
 
-    private void handleAgentResponse(AgentResponse response, ChatMessage originalMessage) {
-        if (response == null || response.isIgnore()) {
+    private void handleAgentResponse(AgentResponse response, ChatMessage originalMessage, String agentSessionId) {
+        if (response == null || response.isIgnore() || response.isMention()) {
             return;
         }
 
@@ -87,18 +103,56 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
         if (response.isSuggestion()) {
             agentMessage.setContent(response.getContent());
+            broadcastAgentMessage(agentMessage);
         } else if (response.isTask()) {
-            agentMessage.setContent("收到任务指令，正在处理: " + response.getContent());
-        } else {
+            agentClient.plan(response.getContent(), originalMessage.getContent(), agentSessionId)
+                    .thenAccept(plan -> handlePlanResponse(plan, originalMessage, agentSessionId))
+                    .exceptionally(ex -> {
+                        logger.error("Plan generation failed", ex);
+                        return null;
+                    });
+        }
+    }
+
+    private void handlePlanResponse(PlanResponse plan, ChatMessage originalMessage, String agentSessionId) {
+        if (plan == null || plan.getSteps() == null || plan.getSteps().isEmpty()) {
             return;
         }
 
+        ChatMessage planMessage = new ChatMessage();
+        planMessage.setId("progress-" + plan.getTask());
+        planMessage.setSender("agent");
+        planMessage.setTimestamp(System.currentTimeMillis());
+        planMessage.setAgentType("plan");
+
+        StringBuilder sb = new StringBuilder("已生成执行计划:\n");
+        for (int i = 0; i < plan.getSteps().size(); i++) {
+            sb.append(i + 1).append(". ").append(plan.getSteps().get(i).getName()).append("\n");
+        }
+        planMessage.setContent(sb.toString().trim());
+        planMessage.setSteps(plan.getSteps());
+
         try {
-            String agentJson = objectMapper.writeValueAsString(agentMessage);
-            sessionManager.broadcast(agentJson);
-            logger.info("Agent message broadcast: type={}, content={}", response.getType(), agentMessage.getContent());
+            String planJson = objectMapper.writeValueAsString(planMessage);
+            sessionManager.broadcast(planJson);
+            logger.info("Plan broadcast: task={}, steps={}", plan.getTask(), plan.getSteps().size());
         } catch (JsonProcessingException ex) {
-            logger.error("Failed to serialize agent message", ex);
+            logger.error("Failed to serialize plan message", ex);
+        }
+
+        agentClient.execute(plan, agentSessionId)
+                .exceptionally(ex -> {
+                    logger.error("Execute failed", ex);
+                    return null;
+                });
+    }
+
+    private void broadcastAgentMessage(ChatMessage msg) {
+        try {
+            String json = objectMapper.writeValueAsString(msg);
+            sessionManager.broadcast(json);
+        } catch (JsonProcessingException ex) {
+            logger.error("Failed to broadcast agent message", ex);
         }
     }
 
@@ -119,7 +173,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         sessionManager.removeSession(session);
-        logger.info("WebSocket disconnected: sessionId={}, reason={}", session.getId(), status);
+        String agentSessionId = agentSessionMap.remove(session.getId());
+        logger.info("WebSocket disconnected: sessionId={}, agentSessionId={}, reason={}",
+                session.getId(), agentSessionId, status);
     }
 }
-

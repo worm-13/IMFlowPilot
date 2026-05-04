@@ -1,4 +1,4 @@
-import type { ChatMessage } from '../stores/chatStore'
+import type { ChatMessage, StepItem } from '../stores/chatStore'
 
 const WS_URL = 'ws://localhost:8080/ws'
 
@@ -10,7 +10,10 @@ export interface OutboundChatPayload {
     sender: string
     content: string
     timestamp: number
+    mentions?: string[]
 }
+
+const MENTION_REGEX = /@(\S+)/g
 
 const normalizeSender = (sender: unknown): ChatMessage['sender'] => {
     if (sender === 'user') return 'user'
@@ -27,6 +30,8 @@ const tryParseServerMessage = (raw: string): ChatMessage | null => {
             message?: unknown
             text?: unknown
             timestamp?: unknown
+            mentions?: unknown
+            steps?: unknown
         }
 
         const contentCandidate = data.content ?? data.message ?? data.text
@@ -40,6 +45,10 @@ const tryParseServerMessage = (raw: string): ChatMessage | null => {
             content: contentCandidate.trim(),
             timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now(),
             agentType: typeof data.agentType === 'string' ? data.agentType : undefined,
+            mentions: Array.isArray(data.mentions) ? data.mentions.filter((m): m is string => typeof m === 'string') : undefined,
+            steps: Array.isArray(data.steps) ? data.steps.filter((s): s is StepItem =>
+                typeof s === 'object' && s !== null && typeof (s as StepItem).step === 'string'
+            ) : undefined,
         }
     } catch {
         const content = raw.trim()
@@ -52,6 +61,18 @@ const tryParseServerMessage = (raw: string): ChatMessage | null => {
             timestamp: Date.now(),
         }
     }
+}
+
+export const extractMentions = (text: string): string[] => {
+    const mentions: string[] = []
+    let match: RegExpExecArray | null
+    while ((match = MENTION_REGEX.exec(text)) !== null) {
+        const name = match[1].trim()
+        if (name && !mentions.includes(name)) {
+            mentions.push(name)
+        }
+    }
+    return mentions
 }
 
 export const connectWebSocket = (onReceive: (message: ChatMessage) => void) => {

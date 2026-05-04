@@ -18,7 +18,7 @@ def get_llm() -> ChatOpenAI:
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable is not set")
 
-    base_url = os.getenv("OPENAI_BASE_URL", "sk-1705d992e2a7421eb9928a0f9c0baedd")
+    base_url = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
     model_name = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
     temperature = float(os.getenv("AGENT_TEMPERATURE", "0.3"))
 

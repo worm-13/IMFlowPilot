@@ -35,4 +35,8 @@ public class AgentResponse {
     public boolean isTask() {
         return "task".equals(type);
     }
+
+    public boolean isMention() {
+        return "mention".equals(type);
+    }
 }

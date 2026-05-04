@@ -3,12 +3,20 @@ import { ref } from 'vue'
 
 export type ChatSender = 'user' | 'other' | 'agent'
 
+export interface StepItem {
+    step: string
+    name: string
+    status: string
+}
+
 export interface ChatMessage {
     id: string
     sender: ChatSender
     content: string
     timestamp: number
     agentType?: string
+    mentions?: string[]
+    steps?: StepItem[]
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -18,6 +26,15 @@ export const useChatStore = defineStore('chat', () => {
         messages.value.push(message)
     }
 
+    const upsertMessage = (message: ChatMessage) => {
+        const idx = messages.value.findIndex((m) => m.id === message.id)
+        if (idx >= 0) {
+            messages.value[idx] = message
+        } else {
+            messages.value.push(message)
+        }
+    }
+
     const clearMessages = () => {
         messages.value = []
     }
@@ -25,6 +42,7 @@ export const useChatStore = defineStore('chat', () => {
     return {
         messages,
         addMessage,
+        upsertMessage,
         clearMessages,
     }
 })

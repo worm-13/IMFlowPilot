@@ -1,6 +1,8 @@
 package com.worm.server.client;
 
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
@@ -13,6 +15,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import com.worm.server.dto.AgentResponse;
+import com.worm.server.dto.PlanResponse;
 
 import reactor.core.publisher.Mono;
 
@@ -31,13 +34,22 @@ public class AgentClient {
                                 .build();
         }
 
-        public CompletableFuture<AgentResponse> process(String message) {
-                logger.info("Sending to agent: message={}", message);
+        public CompletableFuture<AgentResponse> process(String message, String sessionId, List<String> mentions) {
+                logger.info("Sending to agent: message={}, sessionId={}, mentions={}", message, sessionId, mentions);
+
+                Map<String, Object> body = new HashMap<>();
+                body.put("message", message);
+                if (sessionId != null && !sessionId.isBlank()) {
+                        body.put("session_id", sessionId);
+                }
+                if (mentions != null && !mentions.isEmpty()) {
+                        body.put("mentions", mentions);
+                }
 
                 return webClient.post()
                                 .uri("/agent/process")
                                 .contentType(MediaType.APPLICATION_JSON)
-                                .bodyValue(Map.of("message", message))
+                                .bodyValue(body)
                                 .retrieve()
                                 .bodyToMono(AgentResponse.class)
                                 .doOnSuccess(response -> logger.info("Agent response: type={}, content={}",
@@ -50,6 +62,69 @@ public class AgentClient {
                                         return Mono.just(fallback());
                                 })
                                 .timeout(Duration.ofSeconds(30))
+                                .toFuture();
+        }
+
+        public CompletableFuture<PlanResponse> plan(String task, String message, String sessionId) {
+                logger.info("Requesting plan: task={}, sessionId={}", task, sessionId);
+
+                Map<String, String> body = new HashMap<>();
+                body.put("task", task);
+                body.put("message", message);
+                if (sessionId != null && !sessionId.isBlank()) {
+                        body.put("session_id", sessionId);
+                }
+
+                return webClient.post()
+                                .uri("/agent/plan")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .bodyValue(body)
+                                .retrieve()
+                                .bodyToMono(PlanResponse.class)
+                                .doOnSuccess(plan -> logger.info("Plan received: task={}, steps={}",
+                                                plan.getTask(), plan.getSteps() != null ? plan.getSteps().size() : 0))
+                                .doOnError(WebClientResponseException.class,
+                                                ex -> logger.warn("Plan request returned status {}: {}",
+                                                                ex.getStatusCode(),
+                                                                ex.getResponseBodyAsString()))
+                                .onErrorResume(ex -> {
+                                        logger.error("Plan request failed", ex);
+                                        return Mono.empty();
+                                })
+                                .timeout(Duration.ofSeconds(30))
+                                .toFuture();
+        }
+
+        public CompletableFuture<PlanResponse> execute(PlanResponse plan, String sessionId) {
+                logger.info("Executing plan: task={}, steps={}, sessionId={}",
+                        plan.getTask(), plan.getSteps() != null ? plan.getSteps().size() : 0, sessionId);
+
+                Map<String, Object> body = new HashMap<>();
+                body.put("task", plan.getTask());
+                body.put("message", plan.getMessage());
+                body.put("steps", plan.getSteps());
+                body.put("callback_url", "http://localhost:8080/api/agent/progress");
+                if (sessionId != null && !sessionId.isBlank()) {
+                        body.put("session_id", sessionId);
+                }
+
+                return webClient.post()
+                                .uri("/agent/execute")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .bodyValue(body)
+                                .retrieve()
+                                .bodyToMono(PlanResponse.class)
+                                .doOnSuccess(result -> logger.info("Execution complete: task={}, steps={}",
+                                                result.getTask(),
+                                                result.getSteps() != null ? result.getSteps().size() : 0))
+                                .doOnError(WebClientResponseException.class,
+                                                ex -> logger.warn("Execute request returned status {}: {}",
+                                                                ex.getStatusCode(), ex.getResponseBodyAsString()))
+                                .onErrorResume(ex -> {
+                                        logger.error("Execute request failed", ex);
+                                        return Mono.empty();
+                                })
+                                .timeout(Duration.ofSeconds(120))
                                 .toFuture();
         }
 

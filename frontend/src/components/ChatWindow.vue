@@ -21,7 +21,7 @@ import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import MessageInput from './MessageInput.vue'
 import MessageItem from './MessageItem.vue'
 import { useChatStore, type ChatMessage } from '../stores/chatStore'
-import { connectWebSocket, disconnectWebSocket, sendWebSocketMessage, type OutboundChatPayload } from '../services/websocket'
+import { connectWebSocket, disconnectWebSocket, sendWebSocketMessage, extractMentions, type OutboundChatPayload } from '../services/websocket'
 
 const chatStore = useChatStore()
 const messageListRef = ref<HTMLElement | null>(null)
@@ -35,12 +35,14 @@ const scrollToBottom = async () => {
 const handleSend = (content: string) => {
   const id = crypto.randomUUID()
   const timestamp = Date.now()
+  const mentions = extractMentions(content)
 
   const outgoingMessage: ChatMessage = {
     id,
     sender: 'user',
     content,
     timestamp,
+    mentions,
   }
 
   chatStore.addMessage(outgoingMessage)
@@ -50,6 +52,7 @@ const handleSend = (content: string) => {
     sender: `client-${id}`,
     content,
     timestamp,
+    mentions: mentions.length > 0 ? mentions : undefined,
   }
 
   sendWebSocketMessage(outboundPayload)
@@ -57,6 +60,10 @@ const handleSend = (content: string) => {
 
 onMounted(() => {
   connectWebSocket((message) => {
+    if (message.sender === 'agent' && (message.agentType === 'progress' || message.agentType === 'plan')) {
+      chatStore.upsertMessage(message)
+      return
+    }
     if (chatStore.messages.some((item) => item.id === message.id)) {
       return
     }

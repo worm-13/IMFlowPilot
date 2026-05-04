@@ -1,5 +1,9 @@
 package com.worm.server.model;
 
+import java.util.List;
+
+import com.worm.server.dto.PlanStep;
+
 public class ChatMessage {
 
     private String id;
@@ -7,6 +11,8 @@ public class ChatMessage {
     private String content;
     private Long timestamp;
     private String agentType;
+    private List<String> mentions;
+    private List<PlanStep> steps;
 
     public String getId() {
         return id;
@@ -48,6 +54,22 @@ public class ChatMessage {
         this.agentType = agentType;
     }
 
+    public List<String> getMentions() {
+        return mentions;
+    }
+
+    public void setMentions(List<String> mentions) {
+        this.mentions = mentions;
+    }
+
+    public List<PlanStep> getSteps() {
+        return steps;
+    }
+
+    public void setSteps(List<PlanStep> steps) {
+        this.steps = steps;
+    }
+
     public boolean isValid() {
         return sender != null && !sender.isBlank()
                 && content != null && !content.isBlank();
@@ -57,4 +79,3 @@ public class ChatMessage {
         return agentType != null && !agentType.isBlank();
     }
 }
-
