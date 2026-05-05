@@ -13,6 +13,7 @@ public class ChatMessage {
     private String agentType;
     private List<String> mentions;
     private List<PlanStep> steps;
+    private String confirmTask;
 
     public String getId() {
         return id;
@@ -68,6 +69,14 @@ public class ChatMessage {
 
     public void setSteps(List<PlanStep> steps) {
         this.steps = steps;
+    }
+
+    public String getConfirmTask() {
+        return confirmTask;
+    }
+
+    public void setConfirmTask(String confirmTask) {
+        this.confirmTask = confirmTask;
     }
 
     public boolean isValid() {

@@ -18,6 +18,20 @@
       </div>
       <p class="whitespace-pre-wrap break-words text-[15px] leading-relaxed" v-html="renderedContent"></p>
       <PlanProgress v-if="showProgress" :steps="message.steps!" />
+      <div v-if="showConfirm" class="mt-3 flex gap-2">
+        <button
+          class="flex-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-indigo-700"
+          @click="$emit('confirm', message.confirmTask)"
+        >
+          开始执行
+        </button>
+        <button
+          class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-500 transition hover:bg-slate-50"
+          @click="$emit('cancel')"
+        >
+          取消
+        </button>
+      </div>
       <p class="mt-1 text-right text-xs" :class="timeClass">{{ formattedTime }}</p>
     </div>
   </div>
@@ -32,6 +46,11 @@ const props = defineProps<{
   message: ChatMessage
 }>()
 
+const emit = defineEmits<{
+  confirm: [task: string]
+  cancel: []
+}>()
+
 const MENTION_RENDER_REGEX = /(@\S+)/g
 
 const isUser = computed(() => props.message.sender === 'user')
@@ -41,6 +60,12 @@ const showProgress = computed(() =>
   props.message.steps &&
   props.message.steps.length > 0 &&
   (props.message.agentType === 'plan' || props.message.agentType === 'progress')
+)
+
+const showConfirm = computed(() =>
+  isAgent.value &&
+  props.message.confirmTask &&
+  props.message.agentType === 'suggestion'
 )
 
 const renderedContent = computed(() => {

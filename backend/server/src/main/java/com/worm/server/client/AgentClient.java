@@ -52,8 +52,10 @@ public class AgentClient {
                                 .bodyValue(body)
                                 .retrieve()
                                 .bodyToMono(AgentResponse.class)
-                                .doOnSuccess(response -> logger.info("Agent response: type={}, content={}",
-                                                response.getType(), response.getContent()))
+                                .doOnSuccess(response -> logger.info("Agent response: type={}, content={}, requiresConfirmation={}, suggestedTask={}",
+                                                response.getType(), response.getContent(),
+                                                response.getMeta() != null ? response.getMeta().getRequiresConfirmation() : null,
+                                                response.getMeta() != null ? response.getMeta().getSuggestedTask() : null))
                                 .doOnError(WebClientResponseException.class,
                                                 ex -> logger.warn("Agent returned status {}: {}", ex.getStatusCode(),
                                                                 ex.getResponseBodyAsString()))

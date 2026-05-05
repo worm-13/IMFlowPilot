@@ -27,12 +27,21 @@ class ProcessRequest(BaseModel):
 class ProcessResponse(BaseModel):
     type: str = Field(..., description="Classification: ignore | suggestion | task")
     content: str = Field(default="", description="Response content")
+    meta: dict | None = Field(default=None, description="Meta info: requires_confirmation, suggested_task, confidence")
 
 
 @app.post("/agent/process", response_model=ProcessResponse)
 async def process_message(request: ProcessRequest) -> ProcessResponse:
     result = await agent_service.process(request.message, request.session_id, request.mentions)
-    return ProcessResponse(type=result.type, content=result.content)
+    return ProcessResponse(
+        type=result.type,
+        content=result.content,
+        meta={
+            "requires_confirmation": result.requires_confirmation,
+            "suggested_task": result.suggested_task,
+            "confidence": result.confidence,
+        } if result.type in ("suggestion", "task") else None
+    )
 
 
 class PlanRequest(BaseModel):

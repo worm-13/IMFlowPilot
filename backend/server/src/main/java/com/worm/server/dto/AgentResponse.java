@@ -1,12 +1,14 @@
 package com.worm.server.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class AgentResponse {
 
     private String type;
     private String content;
+    private Meta meta;
 
     public String getType() {
         return type;
@@ -24,6 +26,14 @@ public class AgentResponse {
         this.content = content;
     }
 
+    public Meta getMeta() {
+        return meta;
+    }
+
+    public void setMeta(Meta meta) {
+        this.meta = meta;
+    }
+
     public boolean isIgnore() {
         return "ignore".equals(type);
     }
@@ -38,5 +48,45 @@ public class AgentResponse {
 
     public boolean isMention() {
         return "mention".equals(type);
+    }
+
+    public boolean requiresConfirmation() {
+        return meta != null && Boolean.TRUE.equals(meta.getRequiresConfirmation());
+    }
+
+    public String suggestedTask() {
+        return meta != null ? meta.getSuggestedTask() : null;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Meta {
+        private Boolean requiresConfirmation;
+        @JsonProperty("suggested_task")
+        private String suggestedTask;
+        private Double confidence;
+
+        public Boolean getRequiresConfirmation() {
+            return requiresConfirmation;
+        }
+
+        public void setRequiresConfirmation(Boolean requiresConfirmation) {
+            this.requiresConfirmation = requiresConfirmation;
+        }
+
+        public String getSuggestedTask() {
+            return suggestedTask;
+        }
+
+        public void setSuggestedTask(String suggestedTask) {
+            this.suggestedTask = suggestedTask;
+        }
+
+        public Double getConfidence() {
+            return confidence;
+        }
+
+        public void setConfidence(Double confidence) {
+            this.confidence = confidence;
+        }
     }
 }

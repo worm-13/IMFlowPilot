@@ -17,6 +17,7 @@ export interface ChatMessage {
     agentType?: string
     mentions?: string[]
     steps?: StepItem[]
+    confirmTask?: string
 }
 
 export const useChatStore = defineStore('chat', () => {

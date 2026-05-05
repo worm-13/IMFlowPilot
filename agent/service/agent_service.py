@@ -146,4 +146,4 @@ class AgentService:
         return data
 
     def _fallback(self) -> AgentResponse:
-        return AgentResponse(type="ignore", content="")
+        return AgentResponse(type="ignore", content="", requires_confirmation=False, suggested_task="", confidence=0.0)

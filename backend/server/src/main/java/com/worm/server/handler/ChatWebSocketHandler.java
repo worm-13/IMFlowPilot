@@ -11,7 +11,9 @@ import com.worm.server.client.AgentClient;
 import com.worm.server.dto.AgentResponse;
 import com.worm.server.dto.PlanResponse;
 import com.worm.server.model.ChatMessage;
+import com.worm.server.model.SessionContext;
 import com.worm.server.service.SessionManager;
+import com.worm.server.service.TaskService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,21 +31,28 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private final SessionManager sessionManager;
     private final ObjectMapper objectMapper;
     private final AgentClient agentClient;
+    private final TaskService taskService;
 
     private final ConcurrentHashMap<String, String> agentSessionMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, SessionContext> contextMap = new ConcurrentHashMap<>();
 
     public ChatWebSocketHandler(SessionManager sessionManager, ObjectMapper objectMapper,
-            AgentClient agentClient) {
+            AgentClient agentClient, TaskService taskService) {
         this.sessionManager = sessionManager;
         this.objectMapper = objectMapper;
         this.agentClient = agentClient;
+        this.taskService = taskService;
     }
+
+    private static final List<String> CONFIRM_KEYWORDS = List.of(
+            "开始", "执行", "生成", "确认", "好的", "可以", "去做吧", "go", "run", "yes", "ok");
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         sessionManager.addSession(session);
         String agentSessionId = UUID.randomUUID().toString();
         agentSessionMap.put(session.getId(), agentSessionId);
+        contextMap.computeIfAbsent(agentSessionId, id -> new SessionContext(agentSessionId));
         logger.info("WebSocket connected: sessionId={}, agentSessionId={}", session.getId(), agentSessionId);
     }
 
@@ -64,60 +73,123 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 return;
             }
 
-            logger.info("Incoming message: sessionId={}, sender={}, content={}, mentions={}",
-                    session.getId(), chatMessage.getSender(), chatMessage.getContent(), chatMessage.getMentions());
+            String agentSessionId = agentSessionMap.get(session.getId());
+            SessionContext context = contextMap.computeIfAbsent(agentSessionId,
+                    id -> new SessionContext(agentSessionId));
+
+            logger.info("Incoming: sessionId={}, sender={}, content={}, mentions={}, confirmTask={}",
+                    session.getId(), chatMessage.getSender(), chatMessage.getContent(),
+                    chatMessage.getMentions(), chatMessage.getConfirmTask());
 
             String outboundJson = objectMapper.writeValueAsString(chatMessage);
             sessionManager.broadcast(outboundJson);
 
-            String agentSessionId = agentSessionMap.get(session.getId());
+            context.appendHistory(chatMessage.getContent());
 
             List<String> mentions = chatMessage.getMentions();
             boolean shouldCallAgent = (mentions == null || mentions.isEmpty() || mentions.contains("agent"));
 
-            if (shouldCallAgent) {
-                agentClient.process(chatMessage.getContent(), agentSessionId, mentions)
-                        .thenAccept(response -> handleAgentResponse(response, chatMessage, agentSessionId))
-                        .exceptionally(ex -> {
-                            logger.error("Agent async processing failed", ex);
-                            return null;
-                        });
-            } else {
+            if (!shouldCallAgent) {
                 logger.info("Message directed to others (mentions={}), skipping agent", mentions);
+                return;
             }
+
+            if (chatMessage.getConfirmTask() != null && !chatMessage.getConfirmTask().isBlank()) {
+                handleExplicitConfirm(chatMessage.getConfirmTask(), chatMessage, agentSessionId, context);
+                return;
+            }
+
+            if (context.getPendingTask() != null && isConfirmMessage(chatMessage.getContent())) {
+                handleImplicitConfirm(context.getPendingTask(), chatMessage, agentSessionId, context);
+                return;
+            }
+
+            agentClient.process(chatMessage.getContent(), agentSessionId, mentions)
+                    .thenAccept(response -> handleAgentResponse(response, chatMessage, agentSessionId, context))
+                    .exceptionally(ex -> {
+                        logger.error("Agent async processing failed", ex);
+                        return null;
+                    });
+
         } catch (JsonProcessingException ex) {
             logger.warn("Invalid chat message payload from session {}: {}", session.getId(), message.getPayload(), ex);
         }
     }
 
-    private void handleAgentResponse(AgentResponse response, ChatMessage originalMessage, String agentSessionId) {
+    private boolean isConfirmMessage(String content) {
+        String lower = content.toLowerCase().trim();
+        for (String kw : CONFIRM_KEYWORDS) {
+            if (lower.equals(kw))
+                return true;
+            if (lower.startsWith(kw) && lower.length() <= kw.length() + 2)
+                return true;
+        }
+        return false;
+    }
+
+    private void handleExplicitConfirm(String confirmTask, ChatMessage originalMessage,
+            String agentSessionId, SessionContext context) {
+        logger.info("Explicit confirm: task={}", confirmTask);
+        context.setActiveTask(confirmTask);
+        context.setPendingTask(null);
+        triggerTaskExecution(confirmTask, originalMessage.getContent(), agentSessionId, context);
+    }
+
+    private void handleImplicitConfirm(String pendingTask, ChatMessage originalMessage,
+            String agentSessionId, SessionContext context) {
+        logger.info("Implicit confirm: pendingTask={}, message={}", pendingTask, originalMessage.getContent());
+        context.setActiveTask(pendingTask);
+        context.setPendingTask(null);
+        triggerTaskExecution(pendingTask, originalMessage.getContent(), agentSessionId, context);
+    }
+
+    private void triggerTaskExecution(String taskType, String userMessage, String agentSessionId,
+            SessionContext context) {
+        broadcastTaskConfirm(taskType);
+
+        agentClient.plan(taskType, userMessage, agentSessionId)
+                .thenAccept(plan -> handlePlanResponse(plan, agentSessionId))
+                .exceptionally(ex -> {
+                    logger.error("Plan generation failed, running directly", ex);
+                    taskService.execute(taskType, context);
+                    broadcastComplete(taskType);
+                    return null;
+                });
+    }
+
+    private void handleAgentResponse(AgentResponse response, ChatMessage originalMessage,
+            String agentSessionId, SessionContext context) {
         if (response == null || response.isIgnore() || response.isMention()) {
             return;
         }
 
-        ChatMessage agentMessage = new ChatMessage();
-        agentMessage.setId(UUID.randomUUID().toString());
-        agentMessage.setSender("agent");
-        agentMessage.setTimestamp(System.currentTimeMillis());
-        agentMessage.setAgentType(response.getType());
-
         if (response.isSuggestion()) {
-            agentMessage.setContent(response.getContent());
-            broadcastAgentMessage(agentMessage);
+            if (response.requiresConfirmation() && response.suggestedTask() != null) {
+                context.setPendingTask(response.suggestedTask());
+                logger.info("Pending task set: sessionId={}, pendingTask={}",
+                        agentSessionId, response.suggestedTask());
+            }
+            broadcastSuggestion(response);
         } else if (response.isTask()) {
-            agentClient.plan(response.getContent(), originalMessage.getContent(), agentSessionId)
-                    .thenAccept(plan -> handlePlanResponse(plan, originalMessage, agentSessionId))
-                    .exceptionally(ex -> {
-                        logger.error("Plan generation failed", ex);
-                        return null;
-                    });
+            String taskType = response.getContent();
+            if (taskType == null || taskType.isBlank()) {
+                taskType = response.suggestedTask();
+            }
+            if (taskType == null || taskType.isBlank()) {
+                return;
+            }
+            context.setActiveTask(taskType);
+            context.setPendingTask(null);
+            triggerTaskExecution(taskType, originalMessage.getContent(), agentSessionId, context);
         }
     }
 
-    private void handlePlanResponse(PlanResponse plan, ChatMessage originalMessage, String agentSessionId) {
+    private void handlePlanResponse(PlanResponse plan, String agentSessionId) {
         if (plan == null || plan.getSteps() == null || plan.getSteps().isEmpty()) {
             return;
         }
+
+        SessionContext context = contextMap.get(agentSessionId);
 
         ChatMessage planMessage = new ChatMessage();
         planMessage.setId("progress-" + plan.getTask());
@@ -125,7 +197,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         planMessage.setTimestamp(System.currentTimeMillis());
         planMessage.setAgentType("plan");
 
-        StringBuilder sb = new StringBuilder("已生成执行计划:\n");
+        StringBuilder sb = new StringBuilder("任务执行中: " + plan.getTask() + "\n");
         for (int i = 0; i < plan.getSteps().size(); i++) {
             sb.append(i + 1).append(". ").append(plan.getSteps().get(i).getName()).append("\n");
         }
@@ -145,6 +217,42 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                     logger.error("Execute failed", ex);
                     return null;
                 });
+
+        if (context != null) {
+            taskService.execute(plan.getTask(), context);
+        }
+        broadcastComplete(plan.getTask());
+    }
+
+    private void broadcastSuggestion(AgentResponse response) {
+        ChatMessage msg = new ChatMessage();
+        msg.setId(UUID.randomUUID().toString());
+        msg.setSender("agent");
+        msg.setTimestamp(System.currentTimeMillis());
+        msg.setAgentType("suggestion");
+        msg.setContent(response.getContent());
+        msg.setConfirmTask(response.suggestedTask());
+        broadcastAgentMessage(msg);
+    }
+
+    private void broadcastTaskConfirm(String taskType) {
+        ChatMessage msg = new ChatMessage();
+        msg.setId(UUID.randomUUID().toString());
+        msg.setSender("agent");
+        msg.setTimestamp(System.currentTimeMillis());
+        msg.setAgentType("task");
+        msg.setContent("收到确认，开始执行: " + taskType);
+        broadcastAgentMessage(msg);
+    }
+
+    private void broadcastComplete(String taskType) {
+        ChatMessage msg = new ChatMessage();
+        msg.setId("progress-" + taskType);
+        msg.setSender("agent");
+        msg.setTimestamp(System.currentTimeMillis());
+        msg.setAgentType("progress");
+        msg.setContent("任务已完成: " + taskType);
+        broadcastAgentMessage(msg);
     }
 
     private void broadcastAgentMessage(ChatMessage msg) {
@@ -174,6 +282,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         sessionManager.removeSession(session);
         String agentSessionId = agentSessionMap.remove(session.getId());
+        contextMap.remove(agentSessionId);
         logger.info("WebSocket disconnected: sessionId={}, agentSessionId={}, reason={}",
                 session.getId(), agentSessionId, status);
     }

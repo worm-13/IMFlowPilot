@@ -11,6 +11,7 @@ export interface OutboundChatPayload {
     content: string
     timestamp: number
     mentions?: string[]
+    confirmTask?: string
 }
 
 const MENTION_REGEX = /@(\S+)/g
@@ -32,6 +33,7 @@ const tryParseServerMessage = (raw: string): ChatMessage | null => {
             timestamp?: unknown
             mentions?: unknown
             steps?: unknown
+            confirmTask?: unknown
         }
 
         const contentCandidate = data.content ?? data.message ?? data.text
@@ -49,6 +51,7 @@ const tryParseServerMessage = (raw: string): ChatMessage | null => {
             steps: Array.isArray(data.steps) ? data.steps.filter((s): s is StepItem =>
                 typeof s === 'object' && s !== null && typeof (s as StepItem).step === 'string'
             ) : undefined,
+            confirmTask: typeof data.confirmTask === 'string' ? data.confirmTask : undefined,
         }
     } catch {
         const content = raw.trim()

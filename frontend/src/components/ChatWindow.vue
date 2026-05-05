@@ -7,7 +7,7 @@
 
       <div ref="messageListRef" class="flex-1 overflow-y-auto px-4 py-5 sm:px-6">
         <div class="mx-auto flex w-full max-w-3xl flex-col gap-4">
-          <MessageItem v-for="message in chatStore.messages" :key="message.id" :message="message" />
+          <MessageItem v-for="message in chatStore.messages" :key="message.id" :message="message" @confirm="handleConfirm" />
         </div>
       </div>
 
@@ -32,7 +32,7 @@ const scrollToBottom = async () => {
   messageListRef.value.scrollTop = messageListRef.value.scrollHeight
 }
 
-const handleSend = (content: string) => {
+const handleSend = (content: string, confirmTask?: string) => {
   const id = crypto.randomUUID()
   const timestamp = Date.now()
   const mentions = extractMentions(content)
@@ -53,9 +53,14 @@ const handleSend = (content: string) => {
     content,
     timestamp,
     mentions: mentions.length > 0 ? mentions : undefined,
+    confirmTask,
   }
 
   sendWebSocketMessage(outboundPayload)
+}
+
+const handleConfirm = (confirmTask: string) => {
+  handleSend('开始', confirmTask)
 }
 
 onMounted(() => {
