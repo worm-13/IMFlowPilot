@@ -7,9 +7,17 @@ class PlanStep:
     step: str
     name: str
     status: str = "pending"
+    tool: str = ""
+    args: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, str]:
-        return {"step": self.step, "name": self.name, "status": self.status}
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "step": self.step,
+            "name": self.name,
+            "status": self.status,
+            "tool": self.tool,
+            "args": self.args,
+        }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PlanStep":
@@ -17,6 +25,8 @@ class PlanStep:
             step=data.get("step", ""),
             name=data.get("name", ""),
             status=data.get("status", "pending"),
+            tool=data.get("tool", ""),
+            args=data.get("args", {}),
         )
 
 

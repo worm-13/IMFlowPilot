@@ -64,6 +64,10 @@ public class AgentResponse {
         @JsonProperty("suggested_task")
         private String suggestedTask;
         private Double confidence;
+        @JsonProperty("info_sufficiency")
+        private String infoSufficiency;
+        @JsonProperty("missing_fields")
+        private java.util.List<String> missingFields;
 
         public Boolean getRequiresConfirmation() {
             return requiresConfirmation;
@@ -87,6 +91,22 @@ public class AgentResponse {
 
         public void setConfidence(Double confidence) {
             this.confidence = confidence;
+        }
+
+        public String getInfoSufficiency() {
+            return infoSufficiency;
+        }
+
+        public void setInfoSufficiency(String infoSufficiency) {
+            this.infoSufficiency = infoSufficiency;
+        }
+
+        public java.util.List<String> getMissingFields() {
+            return missingFields;
+        }
+
+        public void setMissingFields(java.util.List<String> missingFields) {
+            this.missingFields = missingFields;
         }
     }
 }

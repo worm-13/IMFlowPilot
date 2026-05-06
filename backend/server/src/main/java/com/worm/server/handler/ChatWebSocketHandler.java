@@ -2,7 +2,9 @@ package com.worm.server.handler;
 
 import java.util.UUID;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -45,7 +47,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     private static final List<String> CONFIRM_KEYWORDS = List.of(
-            "开始", "执行", "生成", "确认", "好的", "可以", "去做吧", "go", "run", "yes", "ok");
+            "开始", "执行", "确认", "确认生成", "开始生成", "开始执行");
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
@@ -104,7 +106,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 return;
             }
 
-            agentClient.process(chatMessage.getContent(), agentSessionId, mentions)
+            if (context.isInInfoCollection()) {
+                int index = context.getCollectedInfo().size() + 1;
+                context.setCollectedInfo("user_input_" + index, chatMessage.getContent());
+                logger.info("Info collected: sessionId={}, key=user_input_{}, content={}",
+                        agentSessionId, index, chatMessage.getContent());
+            }
+
+            agentClient.process(chatMessage.getContent(), agentSessionId, mentions,
+                    context.getPendingTask(), context.getCollectedInfo(), context.isInInfoCollection())
                     .thenAccept(response -> handleAgentResponse(response, chatMessage, agentSessionId, context))
                     .exceptionally(ex -> {
                         logger.error("Agent async processing failed", ex);
@@ -132,7 +142,24 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         logger.info("Explicit confirm: task={}", confirmTask);
         context.setActiveTask(confirmTask);
         context.setPendingTask(null);
-        triggerTaskExecution(confirmTask, originalMessage.getContent(), agentSessionId, context);
+
+        String enrichedMessage = enrichMessageWithCollectedInfo(
+                originalMessage.getContent(), context.getCollectedInfo());
+        context.resetInfoCollection();
+
+        triggerTaskExecution(confirmTask, enrichedMessage, agentSessionId, context);
+    }
+
+    private String enrichMessageWithCollectedInfo(String original, Map<String, String> collected) {
+        if (collected == null || collected.isEmpty()) {
+            return original;
+        }
+        StringBuilder sb = new StringBuilder(original);
+        sb.append("\n\n[已收集信息]\n");
+        for (Map.Entry<String, String> entry : collected.entrySet()) {
+            sb.append(entry.getKey()).append(": ").append(entry.getValue()).append("\n");
+        }
+        return sb.toString();
     }
 
     private void handleImplicitConfirm(String pendingTask, ChatMessage originalMessage,
@@ -164,12 +191,26 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
 
         if (response.isSuggestion()) {
-            if (response.requiresConfirmation() && response.suggestedTask() != null) {
+            AgentResponse.Meta meta = response.getMeta();
+            String infoSufficiency = meta != null ? meta.getInfoSufficiency() : "unknown";
+
+            if ("insufficient".equals(infoSufficiency) || "partial".equals(infoSufficiency)) {
+                context.setInInfoCollection(true);
                 context.setPendingTask(response.suggestedTask());
-                logger.info("Pending task set: sessionId={}, pendingTask={}",
-                        agentSessionId, response.suggestedTask());
+                if (meta != null && meta.getMissingFields() != null) {
+                    context.setMissingFields(meta.getMissingFields());
+                }
+                logger.info("Info collection started: sessionId={}, pendingTask={}, missingFields={}",
+                        agentSessionId, response.suggestedTask(), context.getMissingFields());
+                broadcastInfoRequest(response);
+            } else {
+                if (response.requiresConfirmation() && response.suggestedTask() != null) {
+                    context.setPendingTask(response.suggestedTask());
+                    logger.info("Pending task set: sessionId={}, pendingTask={}",
+                            agentSessionId, response.suggestedTask());
+                }
+                broadcastSuggestion(response);
             }
-            broadcastSuggestion(response);
         } else if (response.isTask()) {
             String taskType = response.getContent();
             if (taskType == null || taskType.isBlank()) {
@@ -180,6 +221,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             }
             context.setActiveTask(taskType);
             context.setPendingTask(null);
+            context.resetInfoCollection();
             triggerTaskExecution(taskType, originalMessage.getContent(), agentSessionId, context);
         }
     }
@@ -213,15 +255,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
 
         agentClient.execute(plan, agentSessionId)
+                .thenAccept(result -> {
+                    if (context != null) {
+                        taskService.execute(plan.getTask(), context);
+                    }
+                })
                 .exceptionally(ex -> {
                     logger.error("Execute failed", ex);
                     return null;
                 });
-
-        if (context != null) {
-            taskService.execute(plan.getTask(), context);
-        }
-        broadcastComplete(plan.getTask());
     }
 
     private void broadcastSuggestion(AgentResponse response) {
@@ -232,6 +274,16 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         msg.setAgentType("suggestion");
         msg.setContent(response.getContent());
         msg.setConfirmTask(response.suggestedTask());
+        broadcastAgentMessage(msg);
+    }
+
+    private void broadcastInfoRequest(AgentResponse response) {
+        ChatMessage msg = new ChatMessage();
+        msg.setId(UUID.randomUUID().toString());
+        msg.setSender("agent");
+        msg.setTimestamp(System.currentTimeMillis());
+        msg.setAgentType("info_request");
+        msg.setContent(response.getContent());
         broadcastAgentMessage(msg);
     }
 

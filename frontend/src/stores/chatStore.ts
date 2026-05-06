@@ -7,6 +7,8 @@ export interface StepItem {
     step: string
     name: string
     status: string
+    tool?: string
+    args?: Record<string, unknown>
 }
 
 export interface ChatMessage {

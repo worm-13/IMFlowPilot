@@ -50,7 +50,13 @@ const tryParseServerMessage = (raw: string): ChatMessage | null => {
             mentions: Array.isArray(data.mentions) ? data.mentions.filter((m): m is string => typeof m === 'string') : undefined,
             steps: Array.isArray(data.steps) ? data.steps.filter((s): s is StepItem =>
                 typeof s === 'object' && s !== null && typeof (s as StepItem).step === 'string'
-            ) : undefined,
+            ).map(s => ({
+                ...s as StepItem,
+                tool: typeof (s as Record<string, unknown>).tool === 'string' ? (s as Record<string, unknown>).tool as string : undefined,
+                args: typeof (s as Record<string, unknown>).args === 'object' && (s as Record<string, unknown>).args !== null
+                    ? (s as Record<string, unknown>).args as Record<string, unknown>
+                    : undefined,
+            })) : undefined,
             confirmTask: typeof data.confirmTask === 'string' ? data.confirmTask : undefined,
         }
     } catch {

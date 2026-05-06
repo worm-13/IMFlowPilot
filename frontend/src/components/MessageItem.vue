@@ -17,7 +17,6 @@
         </span>
       </div>
       <p class="whitespace-pre-wrap break-words text-[15px] leading-relaxed" v-html="renderedContent"></p>
-      <PlanProgress v-if="showProgress" :steps="message.steps!" />
       <div v-if="showConfirm" class="mt-3 flex gap-2">
         <button
           class="flex-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-indigo-700"
@@ -40,7 +39,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ChatMessage } from '../stores/chatStore'
-import PlanProgress from './PlanProgress.vue'
 
 const props = defineProps<{
   message: ChatMessage
@@ -55,12 +53,6 @@ const MENTION_RENDER_REGEX = /(@\S+)/g
 
 const isUser = computed(() => props.message.sender === 'user')
 const isAgent = computed(() => props.message.sender === 'agent')
-const showProgress = computed(() =>
-  isAgent.value &&
-  props.message.steps &&
-  props.message.steps.length > 0 &&
-  (props.message.agentType === 'plan' || props.message.agentType === 'progress')
-)
 
 const showConfirm = computed(() =>
   isAgent.value &&
@@ -96,12 +88,14 @@ const timeClass = computed(() => {
 const agentLabelClass = computed(() => {
   if (props.message.agentType === 'task') return 'text-blue-600'
   if (props.message.agentType === 'suggestion') return 'text-purple-600'
+  if (props.message.agentType === 'info_request') return 'text-teal-600'
   return 'text-slate-500'
 })
 
 const agentTypeLabel = computed(() => {
   if (props.message.agentType === 'task') return '任务执行'
   if (props.message.agentType === 'suggestion') return '智能建议'
+  if (props.message.agentType === 'info_request') return '信息收集'
   return '回复'
 })
 

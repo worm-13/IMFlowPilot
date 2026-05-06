@@ -34,8 +34,10 @@ public class AgentClient {
                                 .build();
         }
 
-        public CompletableFuture<AgentResponse> process(String message, String sessionId, List<String> mentions) {
-                logger.info("Sending to agent: message={}, sessionId={}, mentions={}", message, sessionId, mentions);
+        public CompletableFuture<AgentResponse> process(String message, String sessionId, List<String> mentions,
+                        String pendingTask, Map<String, String> collectedInfo, boolean inInfoCollection) {
+                logger.info("Sending to agent: message={}, sessionId={}, mentions={}, pendingTask={}, inInfoCollection={}",
+                                message, sessionId, mentions, pendingTask, inInfoCollection);
 
                 Map<String, Object> body = new HashMap<>();
                 body.put("message", message);
@@ -45,6 +47,13 @@ public class AgentClient {
                 if (mentions != null && !mentions.isEmpty()) {
                         body.put("mentions", mentions);
                 }
+                if (pendingTask != null && !pendingTask.isBlank()) {
+                        body.put("pending_task", pendingTask);
+                }
+                if (collectedInfo != null && !collectedInfo.isEmpty()) {
+                        body.put("collected_info", collectedInfo);
+                }
+                body.put("in_info_collection", inInfoCollection);
 
                 return webClient.post()
                                 .uri("/agent/process")

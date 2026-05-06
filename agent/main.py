@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field
 from service.agent_service import AgentService
 from service.planner import PlannerService
 from service.orchestrator import OrchestratorService
+from service.tools.registry import ToolRegistry
+from service.tools.doc_generator import DocGeneratorTool
+from service.tools.notifier import NotifierTool
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,22 +20,31 @@ agent_service = AgentService()
 planner_service = PlannerService()
 orchestrator_service = OrchestratorService()
 
+ToolRegistry.register(DocGeneratorTool())
+ToolRegistry.register(NotifierTool())
+
 
 class ProcessRequest(BaseModel):
     message: str = Field(..., min_length=1, description="User chat message")
     session_id: str = Field(default="", description="Session ID for context memory")
     mentions: list[str] = Field(default_factory=list, description="List of mentioned users (e.g. ['agent', '陈俊宇'])")
+    pending_task: str = Field(default="", description="Current pending task from session context")
+    collected_info: dict[str, str] = Field(default_factory=dict, description="Collected info from info-collection phase")
+    in_info_collection: bool = Field(default=False, description="Whether session is in info-collection phase")
 
 
 class ProcessResponse(BaseModel):
     type: str = Field(..., description="Classification: ignore | suggestion | task")
     content: str = Field(default="", description="Response content")
-    meta: dict | None = Field(default=None, description="Meta info: requires_confirmation, suggested_task, confidence")
+    meta: dict | None = Field(default=None, description="Meta info: requires_confirmation, suggested_task, confidence, info_sufficiency, missing_fields")
 
 
 @app.post("/agent/process", response_model=ProcessResponse)
 async def process_message(request: ProcessRequest) -> ProcessResponse:
-    result = await agent_service.process(request.message, request.session_id, request.mentions)
+    result = await agent_service.process(
+        request.message, request.session_id, request.mentions,
+        request.pending_task, request.collected_info, request.in_info_collection,
+    )
     return ProcessResponse(
         type=result.type,
         content=result.content,
@@ -40,6 +52,8 @@ async def process_message(request: ProcessRequest) -> ProcessResponse:
             "requires_confirmation": result.requires_confirmation,
             "suggested_task": result.suggested_task,
             "confidence": result.confidence,
+            "info_sufficiency": result.info_sufficiency,
+            "missing_fields": result.missing_fields,
         } if result.type in ("suggestion", "task") else None
     )
 

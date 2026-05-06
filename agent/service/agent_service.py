@@ -25,12 +25,22 @@ class AgentService:
         chain = prompt | self.llm | StrOutputParser()
         return chain
 
-    async def process(self, message: str, session_id: str = "", mentions: list[str] | None = None) -> AgentResponse:
+    async def process(self, message: str, session_id: str = "", mentions: list[str] | None = None,
+                      pending_task: str = "", collected_info: dict[str, str] | None = None,
+                      in_info_collection: bool = False) -> AgentResponse:
         try:
             mentions_text = self._format_mentions(mentions)
             history_text = self._load_history(session_id)
+            collected_text = self._format_collected_info(collected_info)
 
-            raw_output = await self.chain.ainvoke({"message": message, "history": history_text, "mentions": mentions_text})
+            raw_output = await self.chain.ainvoke({
+                "message": message,
+                "history": history_text,
+                "mentions": mentions_text,
+                "pending_task": pending_task or "(none)",
+                "collected_info": collected_text,
+                "in_info_collection": str(in_info_collection),
+            })
             logger.info(f"LLM raw output: {raw_output}")
 
             parsed = self._parse_json(raw_output)
@@ -47,6 +57,11 @@ class AgentService:
         if not mentions:
             return "(none)"
         return ", ".join(mentions)
+
+    def _format_collected_info(self, collected_info: dict[str, str] | None) -> str:
+        if not collected_info:
+            return "(none)"
+        return ", ".join(f"{k}={v}" for k, v in collected_info.items())
 
     def _load_history(self, session_id: str) -> str:
         if not session_id:
@@ -146,4 +161,4 @@ class AgentService:
         return data
 
     def _fallback(self) -> AgentResponse:
-        return AgentResponse(type="ignore", content="", requires_confirmation=False, suggested_task="", confidence=0.0)
+        return AgentResponse(type="ignore", content="", requires_confirmation=False, suggested_task="", confidence=0.0, info_sufficiency="unknown", missing_fields=[])
