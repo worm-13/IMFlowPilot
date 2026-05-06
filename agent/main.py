@@ -1,6 +1,8 @@
 import logging
+import os
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from service.agent_service import AgentService
@@ -99,6 +101,14 @@ async def execute_plan(request: ExecuteRequest):
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.get("/download/{file_name}")
+async def download_file(file_name: str):
+    file_path = os.path.join(OUTPUT_DIR, file_name)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path, filename=file_name, media_type="application/octet-stream")
 
 
 if __name__ == "__main__":

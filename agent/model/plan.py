@@ -35,10 +35,14 @@ class Plan:
     task: str
     message: str
     steps: list[PlanStep] = field(default_factory=list)
+    result: dict[str, Any] | None = field(default=None)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "task": self.task,
             "message": self.message,
             "steps": [s.to_dict() for s in self.steps],
         }
+        if self.result:
+            data["result"] = self.result
+        return data
