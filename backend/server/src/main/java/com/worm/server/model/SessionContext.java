@@ -15,6 +15,8 @@ public class SessionContext {
     private Map<String, String> collectedInfo;
     private List<String> missingFields;
     private boolean inInfoCollection;
+    private String lastDocContent;
+    private String lastPptContent;
 
     public SessionContext() {
         this.history = new CopyOnWriteArrayList<>();
@@ -58,7 +60,7 @@ public class SessionContext {
 
     public void appendHistory(String message) {
         history.add(message);
-        if (history.size() > 10) {
+        if (history.size() > 50) {
             history.remove(0);
         }
     }
@@ -99,5 +101,21 @@ public class SessionContext {
         this.collectedInfo.clear();
         this.missingFields.clear();
         this.inInfoCollection = false;
+    }
+
+    public String getLastDocContent() {
+        return lastDocContent;
+    }
+
+    public void setLastDocContent(String lastDocContent) {
+        this.lastDocContent = lastDocContent;
+    }
+
+    public String getLastPptContent() {
+        return lastPptContent;
+    }
+
+    public void setLastPptContent(String lastPptContent) {
+        this.lastPptContent = lastPptContent;
     }
 }

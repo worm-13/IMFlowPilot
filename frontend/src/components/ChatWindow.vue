@@ -8,7 +8,7 @@
 
         <div ref="messageListRef" class="flex-1 overflow-y-auto px-4 py-5 sm:px-6">
           <div class="mx-auto flex w-full max-w-3xl flex-col gap-4">
-            <MessageItem v-for="message in chatStore.messages" :key="message.id" :message="message" @confirm="handleConfirm" />
+            <MessageItem v-for="message in chatStore.messages" :key="message.id" :message="message" @confirm="handleConfirm" @preview="handlePreview" />
           </div>
         </div>
 
@@ -17,6 +17,9 @@
 
       <AgentPanel />
     </div>
+
+    <PresentationOverlay />
+    <DocumentPreview v-model="showDocPreview" :content="previewContent" />
   </main>
 </template>
 
@@ -25,6 +28,8 @@ import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import MessageInput from './MessageInput.vue'
 import MessageItem from './MessageItem.vue'
 import AgentPanel from './AgentPanel.vue'
+import PresentationOverlay from './PresentationOverlay.vue'
+import DocumentPreview from './DocumentPreview.vue'
 import { useChatStore, type ChatMessage } from '../stores/chatStore'
 import { useTaskStore } from '../stores/taskStore'
 import { connectWebSocket, disconnectWebSocket, sendWebSocketMessage, extractMentions, type OutboundChatPayload } from '../services/websocket'
@@ -32,6 +37,8 @@ import { connectWebSocket, disconnectWebSocket, sendWebSocketMessage, extractMen
 const chatStore = useChatStore()
 const taskStore = useTaskStore()
 const messageListRef = ref<HTMLElement | null>(null)
+const showDocPreview = ref(false)
+const previewContent = ref('')
 
 const scrollToBottom = async () => {
   await nextTick()
@@ -39,20 +46,21 @@ const scrollToBottom = async () => {
   messageListRef.value.scrollTop = messageListRef.value.scrollHeight
 }
 
-const handleSend = (content: string, confirmTask?: string) => {
+const handleSend = (content: string, confirmTask?: string, skipChatStore = false) => {
   const id = crypto.randomUUID()
   const timestamp = Date.now()
   const mentions = extractMentions(content)
 
-  const outgoingMessage: ChatMessage = {
-    id,
-    sender: 'user',
-    content,
-    timestamp,
-    mentions,
+  if (!skipChatStore) {
+    const outgoingMessage: ChatMessage = {
+      id,
+      sender: 'user',
+      content,
+      timestamp,
+      mentions,
+    }
+    chatStore.addMessage(outgoingMessage)
   }
-
-  chatStore.addMessage(outgoingMessage)
 
   const outboundPayload: OutboundChatPayload = {
     id,
@@ -67,7 +75,14 @@ const handleSend = (content: string, confirmTask?: string) => {
 }
 
 const handleConfirm = (confirmTask: string) => {
-  handleSend('开始', confirmTask)
+  const lastUserMsg = [...chatStore.messages].reverse().find(m => m.sender === 'user')
+  const originalContent = lastUserMsg?.content || '开始'
+  handleSend(originalContent, confirmTask, true)
+}
+
+const handlePreview = (content: string) => {
+  previewContent.value = content
+  showDocPreview.value = true
 }
 
 onMounted(() => {
@@ -75,6 +90,9 @@ onMounted(() => {
     if (message.sender === 'agent' && (message.agentType === 'progress' || message.agentType === 'plan')) {
       if (message.steps && message.steps.length > 0) {
         taskStore.updateTask(message.content, message.steps)
+      }
+      if (message.content && message.content.includes('任务已完成')) {
+        chatStore.addMessage(message)
       }
       return
     }

@@ -27,7 +27,9 @@ class AgentService:
 
     async def process(self, message: str, session_id: str = "", mentions: list[str] | None = None,
                       pending_task: str = "", collected_info: dict[str, str] | None = None,
-                      in_info_collection: bool = False) -> AgentResponse:
+                      in_info_collection: bool = False,
+                      previous_doc_content: str = "", previous_ppt_content: str = "",
+                      chat_history: str = "") -> AgentResponse:
         try:
             mentions_text = self._format_mentions(mentions)
             history_text = self._load_history(session_id)
@@ -40,6 +42,9 @@ class AgentService:
                 "pending_task": pending_task or "(none)",
                 "collected_info": collected_text,
                 "in_info_collection": str(in_info_collection),
+                "previous_doc_content": previous_doc_content or "(none)",
+                "previous_ppt_content": previous_ppt_content or "(none)",
+                "chat_history": chat_history or "(none)",
             })
             logger.info(f"LLM raw output: {raw_output}")
 

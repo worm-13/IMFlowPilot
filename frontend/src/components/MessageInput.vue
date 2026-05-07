@@ -45,7 +45,7 @@ const emit = defineEmits<{
   send: [value: string]
 }>()
 
-const MENTION_USERS = ['agent', '陈俊宇', '张三', '李四']
+const MENTION_USERS = ['agent']
 
 const input = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)

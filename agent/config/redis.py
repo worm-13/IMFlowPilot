@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 SESSION_TTL = int(os.getenv("AGENT_SESSION_TTL", "3600"))
-MAX_HISTORY_ROUNDS = int(os.getenv("AGENT_MAX_HISTORY", "5"))
+MAX_HISTORY_ROUNDS = int(os.getenv("AGENT_MAX_HISTORY", "25"))
 
 
 def get_chat_history(session_id: str) -> Optional[RedisChatMessageHistory]:

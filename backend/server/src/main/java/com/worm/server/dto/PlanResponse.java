@@ -1,6 +1,7 @@
 package com.worm.server.dto;
 
 import java.util.List;
+import java.util.Map;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
@@ -10,6 +11,7 @@ public class PlanResponse {
     private String task;
     private String message;
     private List<PlanStep> steps;
+    private Map<String, Object> result;
 
     public String getTask() {
         return task;
@@ -33,5 +35,13 @@ public class PlanResponse {
 
     public void setSteps(List<PlanStep> steps) {
         this.steps = steps;
+    }
+
+    public Map<String, Object> getResult() {
+        return result;
+    }
+
+    public void setResult(Map<String, Object> result) {
+        this.result = result;
     }
 }

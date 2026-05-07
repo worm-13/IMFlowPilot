@@ -113,8 +113,10 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                         agentSessionId, index, chatMessage.getContent());
             }
 
+            String chatHistory = buildChatHistory(context);
             agentClient.process(chatMessage.getContent(), agentSessionId, mentions,
-                    context.getPendingTask(), context.getCollectedInfo(), context.isInInfoCollection())
+                    context.getPendingTask(), context.getCollectedInfo(), context.isInInfoCollection(),
+                    context.getLastDocContent(), context.getLastPptContent(), chatHistory)
                     .thenAccept(response -> handleAgentResponse(response, chatMessage, agentSessionId, context))
                     .exceptionally(ex -> {
                         logger.error("Agent async processing failed", ex);
@@ -254,8 +256,41 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             logger.error("Failed to serialize plan message", ex);
         }
 
-        agentClient.execute(plan, agentSessionId)
+        agentClient.execute(plan, agentSessionId,
+                context != null ? context.getLastDocContent() : null,
+                context != null ? context.getLastPptContent() : null)
                 .thenAccept(result -> {
+                    if (context != null && result != null && result.getResult() != null) {
+                        Map<String, Object> execResult = result.getResult();
+                        Object generatedContent = execResult.get("generated_content");
+                        if (generatedContent instanceof String content && !content.isBlank()) {
+                            if ("generate_doc".equals(plan.getTask()) || "modify_doc".equals(plan.getTask())) {
+                                context.setLastDocContent(content);
+                                logger.info("Stored lastDocContent for session {} ({} chars)",
+                                        agentSessionId, content.length());
+                            } else if ("generate_ppt".equals(plan.getTask()) || "modify_ppt".equals(plan.getTask())) {
+                                context.setLastPptContent(content);
+                                logger.info("Stored lastPptContent for session {} ({} chars)",
+                                        agentSessionId, content.length());
+                            }
+                        }
+
+                        Object slidesDataRaw = execResult.get("slides_data");
+                        if (slidesDataRaw instanceof List<?> slidesList && !slidesList.isEmpty()) {
+                            @SuppressWarnings("unchecked")
+                            List<Map<String, String>> slidesData = (List<Map<String, String>>) slidesList;
+                            ChatMessage slidesMsg = new ChatMessage();
+                            slidesMsg.setId("slides-" + plan.getTask());
+                            slidesMsg.setSender("agent");
+                            slidesMsg.setTimestamp(System.currentTimeMillis());
+                            slidesMsg.setAgentType("slides_data");
+                            slidesMsg.setContent("PPT 已生成，共 " + slidesData.size() + " 页");
+                            slidesMsg.setSlidesData(slidesData);
+                            broadcastAgentMessage(slidesMsg);
+                            logger.info("Slides data broadcast: sessionId={}, slides={}",
+                                    agentSessionId, slidesData.size());
+                        }
+                    }
                     if (context != null) {
                         taskService.execute(plan.getTask(), context);
                     }
@@ -314,6 +349,18 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         } catch (JsonProcessingException ex) {
             logger.error("Failed to broadcast agent message", ex);
         }
+    }
+
+    private String buildChatHistory(SessionContext context) {
+        List<String> history = context.getHistory();
+        if (history == null || history.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < history.size(); i++) {
+            sb.append("[").append(i + 1).append("] ").append(history.get(i)).append("\n");
+        }
+        return sb.toString().trim();
     }
 
     @Override

@@ -11,11 +11,17 @@ from service.orchestrator import OrchestratorService
 from service.tools.registry import ToolRegistry
 from service.tools.doc_generator import DocGeneratorTool
 from service.tools.notifier import NotifierTool
+from service.tools.ppt_builder import PPTBuildTool
+from service.tools.doc_builder import DocBuildTool
+from service.tools.deliver import DeliverTool
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 app = FastAPI(title="IMFlowPilot Agent", version="1.0.0")
 agent_service = AgentService()
@@ -24,15 +30,21 @@ orchestrator_service = OrchestratorService()
 
 ToolRegistry.register(DocGeneratorTool())
 ToolRegistry.register(NotifierTool())
+ToolRegistry.register(PPTBuildTool())
+ToolRegistry.register(DocBuildTool())
+ToolRegistry.register(DeliverTool())
 
 
 class ProcessRequest(BaseModel):
     message: str = Field(..., min_length=1, description="User chat message")
     session_id: str = Field(default="", description="Session ID for context memory")
-    mentions: list[str] = Field(default_factory=list, description="List of mentioned users (e.g. ['agent', '陈俊宇'])")
+    mentions: list[str] = Field(default_factory=list, description="List of mentioned users (e.g. ['agent'])")
     pending_task: str = Field(default="", description="Current pending task from session context")
     collected_info: dict[str, str] = Field(default_factory=dict, description="Collected info from info-collection phase")
     in_info_collection: bool = Field(default=False, description="Whether session is in info-collection phase")
+    previous_doc_content: str = Field(default="", description="Content of the last generated document for modify context")
+    previous_ppt_content: str = Field(default="", description="Content of the last generated PPT for modify context")
+    chat_history: str = Field(default="", description="Recent chat history from the current session")
 
 
 class ProcessResponse(BaseModel):
@@ -46,6 +58,8 @@ async def process_message(request: ProcessRequest) -> ProcessResponse:
     result = await agent_service.process(
         request.message, request.session_id, request.mentions,
         request.pending_task, request.collected_info, request.in_info_collection,
+        request.previous_doc_content, request.previous_ppt_content,
+        request.chat_history,
     )
     return ProcessResponse(
         type=result.type,
@@ -70,6 +84,7 @@ class PlanResponse(BaseModel):
     task: str
     message: str
     steps: list[dict] = Field(default_factory=list)
+    result: dict | None = Field(default=None)
 
 
 @app.post("/agent/plan", response_model=PlanResponse)
@@ -84,6 +99,8 @@ class ExecuteRequest(BaseModel):
     session_id: str = Field(default="", description="Session ID")
     callback_url: str = Field(default="", description="URL for progress callbacks")
     steps: list[dict] = Field(default_factory=list, description="Plan steps")
+    previous_doc_content: str = Field(default="", description="Original document content for modify context")
+    previous_ppt_content: str = Field(default="", description="Original PPT content for modify context")
 
 
 @app.post("/agent/execute", response_model=PlanResponse)
@@ -94,8 +111,12 @@ async def execute_plan(request: ExecuteRequest):
         message=request.message,
         steps=[PlanStep.from_dict(s) for s in request.steps],
     )
-    result = await orchestrator_service.execute(plan, request.callback_url)
-    return PlanResponse(task=result.task, message=result.message, steps=[s.to_dict() for s in result.steps])
+    result = await orchestrator_service.execute(
+        plan, request.callback_url,
+        request.previous_doc_content, request.previous_ppt_content,
+        request.session_id,
+    )
+    return PlanResponse(task=result.task, message=result.message, steps=[s.to_dict() for s in result.steps], result=result.result)
 
 
 @app.get("/health")

@@ -1,6 +1,7 @@
 package com.worm.server.model;
 
 import java.util.List;
+import java.util.Map;
 
 import com.worm.server.dto.PlanStep;
 
@@ -14,6 +15,11 @@ public class ChatMessage {
     private List<String> mentions;
     private List<PlanStep> steps;
     private String confirmTask;
+    private List<Map<String, String>> slidesData;
+    private String documentContent;
+    private String downloadUrl;
+    private String fileName;
+    private Long fileSize;
 
     public String getId() {
         return id;
@@ -77,6 +83,46 @@ public class ChatMessage {
 
     public void setConfirmTask(String confirmTask) {
         this.confirmTask = confirmTask;
+    }
+
+    public List<Map<String, String>> getSlidesData() {
+        return slidesData;
+    }
+
+    public void setSlidesData(List<Map<String, String>> slidesData) {
+        this.slidesData = slidesData;
+    }
+
+    public String getDocumentContent() {
+        return documentContent;
+    }
+
+    public void setDocumentContent(String documentContent) {
+        this.documentContent = documentContent;
+    }
+
+    public String getDownloadUrl() {
+        return downloadUrl;
+    }
+
+    public void setDownloadUrl(String downloadUrl) {
+        this.downloadUrl = downloadUrl;
+    }
+
+    public String getFileName() {
+        return fileName;
+    }
+
+    public void setFileName(String fileName) {
+        this.fileName = fileName;
+    }
+
+    public Long getFileSize() {
+        return fileSize;
+    }
+
+    public void setFileSize(Long fileSize) {
+        this.fileSize = fileSize;
     }
 
     public boolean isValid() {

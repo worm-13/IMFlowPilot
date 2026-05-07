@@ -22,6 +22,24 @@ const normalizeSender = (sender: unknown): ChatMessage['sender'] => {
     return 'other'
 }
 
+const parseSteps = (raw: unknown): StepItem[] | undefined => {
+    if (!Array.isArray(raw)) return undefined
+    const filtered = raw.filter((s): s is StepItem =>
+        typeof s === 'object' && s !== null && typeof (s as StepItem).step === 'string'
+    )
+    if (filtered.length === 0) return undefined
+    return filtered.map(s => {
+        const item = s as unknown as Record<string, unknown>
+        return {
+            ...s as StepItem,
+            tool: typeof item.tool === 'string' ? item.tool as string : undefined,
+            args: typeof item.args === 'object' && item.args !== null
+                ? item.args as Record<string, unknown>
+                : undefined,
+        }
+    })
+}
+
 const tryParseServerMessage = (raw: string): ChatMessage | null => {
     try {
         const data = JSON.parse(raw) as {
@@ -34,6 +52,12 @@ const tryParseServerMessage = (raw: string): ChatMessage | null => {
             mentions?: unknown
             steps?: unknown
             confirmTask?: unknown
+            slidesData?: unknown
+            documentContent?: unknown
+            agentType?: unknown
+            downloadUrl?: unknown
+            fileName?: unknown
+            fileSize?: unknown
         }
 
         const contentCandidate = data.content ?? data.message ?? data.text
@@ -48,16 +72,15 @@ const tryParseServerMessage = (raw: string): ChatMessage | null => {
             timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now(),
             agentType: typeof data.agentType === 'string' ? data.agentType : undefined,
             mentions: Array.isArray(data.mentions) ? data.mentions.filter((m): m is string => typeof m === 'string') : undefined,
-            steps: Array.isArray(data.steps) ? data.steps.filter((s): s is StepItem =>
-                typeof s === 'object' && s !== null && typeof (s as StepItem).step === 'string'
-            ).map(s => ({
-                ...s as StepItem,
-                tool: typeof (s as Record<string, unknown>).tool === 'string' ? (s as Record<string, unknown>).tool as string : undefined,
-                args: typeof (s as Record<string, unknown>).args === 'object' && (s as Record<string, unknown>).args !== null
-                    ? (s as Record<string, unknown>).args as Record<string, unknown>
-                    : undefined,
-            })) : undefined,
+            steps: parseSteps(data.steps),
             confirmTask: typeof data.confirmTask === 'string' ? data.confirmTask : undefined,
+            slidesData: Array.isArray(data.slidesData) ? data.slidesData.filter((s): s is { title: string; content: string } =>
+                typeof s === 'object' && s !== null && typeof (s as Record<string, unknown>).title === 'string'
+            ) : undefined,
+            documentContent: typeof data.documentContent === 'string' ? data.documentContent : undefined,
+            downloadUrl: typeof data.downloadUrl === 'string' ? data.downloadUrl : undefined,
+            fileName: typeof data.fileName === 'string' ? data.fileName : undefined,
+            fileSize: typeof data.fileSize === 'number' ? data.fileSize : undefined,
         }
     } catch {
         const content = raw.trim()

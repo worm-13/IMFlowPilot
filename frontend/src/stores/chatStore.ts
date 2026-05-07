@@ -20,6 +20,11 @@ export interface ChatMessage {
     mentions?: string[]
     steps?: StepItem[]
     confirmTask?: string
+    slidesData?: { title: string; content: string }[]
+    documentContent?: string
+    downloadUrl?: string
+    fileName?: string
+    fileSize?: number
 }
 
 export const useChatStore = defineStore('chat', () => {

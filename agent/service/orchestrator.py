@@ -1,294 +1,294 @@
 import asyncio
-import json
 import logging
-import re
-import httpx
 import os
-from langchain_core.messages import SystemMessage, HumanMessage
-
-from config.llm import get_llm
-from model.plan import Plan
-from tools.ppt_generator import PPTGenerator
-from tools.doc_generator import DocGenerator
+from collections import deque
+from typing import Any
+import httpx
+from model.plan import Plan, PlanStep
+from service.tools.registry import ToolRegistry
+from config.redis import get_chat_history, MAX_HISTORY_ROUNDS
 
 logger = logging.getLogger(__name__)
 
 
-PPT_SYSTEM_PROMPT = """
-你是一个专业的PPT内容策划助手。你需要根据用户提供的原始素材，生成PPT大纲和每页的详细内容。
-
-请返回JSON格式，结构如下：
-{"outline": ["页面1标题", "页面2标题"], "slides_content": [{"title": "标题1", "content": "内容1"}]}
-
-注意：
-- outline是页面标题数组
-- slides_content是每页详情，必须包含title和content字段
-- content内容要充实，至少3-5行
-- 必须基于用户提供的原始素材生成内容
-"""
-
-DOC_SYSTEM_PROMPT = """
-你是一个专业的文档助手。你需要根据用户提供的原始素材，按照指定的大纲结构，生成文档的各个部分内容。
-
-用户会提供：
-1. 原始素材内容
-2. 文档大纲（各章节标题列表）
-
-你需要为每个章节生成对应的详细内容，内容要：
-- 基于用户提供的原始素材
-- 简洁有条理
-- 符合中文文档规范
-- 每个章节内容控制在100-200字
-- 不要使用markdown格式（如**加粗**等），直接输出纯文本
-- 输出格式：每个章节的标题后面直接跟内容，不要换行
-"""
-
-
 class OrchestratorService:
 
-    def __init__(self) -> None:
-        self.llm = get_llm()
-
-    async def _call_llm(self, content: str) -> str:
-        messages = [
-            SystemMessage(content=PPT_SYSTEM_PROMPT),
-            HumanMessage(content=f"素材内容：\n\n{content}\n\n请根据以上素材生成PPT大纲和每页内容，返回JSON格式。")
-        ]
-        response = await self.llm.ainvoke(messages)
-        return response.content
-
-    async def _call_llm_doc(self, content: str, outline: list) -> dict:
-        outline_str = "\n".join([f"{i+1}. {s}" for i, s in enumerate(outline)])
-        messages = [
-            SystemMessage(content=DOC_SYSTEM_PROMPT),
-            HumanMessage(content=f"原始素材：\n\n{content}\n\n文档大纲：\n{outline_str}\n\n请为上述大纲的每个章节生成详细内容。按照以下格式返回（所有内容在同一行）：\n1. 一、 项目概况：本项目名为...内容...\n2. 二、 背景介绍：xxx内容...\n...以此类推\n\n注意：每个章节的标题和内容在同一行，用冒号分隔，不要换行，不要使用**等markdown符号。")
-        ]
-        response = await self.llm.ainvoke(messages)
-        return response.content
-
-    def _parse_json(self, raw_output: str) -> dict:
-        cleaned = raw_output.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            cleaned = "\n".join(lines[1:])
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-            cleaned = cleaned.strip()
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:].strip()
-
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError as e:
-            logger.warning("JSON parse error: %s, trying to fix...", e)
-            cleaned = re.sub(r'\\(?!["\\/bfnrtu])', '\\\\', cleaned)
-            try:
-                return json.loads(cleaned)
-            except:
-                return None
-
-    def _parse_doc_content(self, raw_output: str, outline: list) -> dict:
-        result = {}
-        lines = raw_output.split("\n")
-        current_section = None
-        current_content = []
-
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            line = re.sub(r'\*+', '', line)
-            line = re.sub(r'^[\d]+\.\s*', '', line)
-
-            matched = False
-            for i, section in enumerate(outline):
-                section_num = str(i + 1)
-                section_name = section.split(".")[-1].strip() if "." in section else section
-                section_clean = re.sub(r'[\s\d、]', '', section_name)
-                prefixes = [f"{section_num}.", f"{section_name}：", f"{section_name}:", f"{section_name}"]
-                for prefix in prefixes:
-                    if line.startswith(prefix) and len(line) > len(prefix) + 1:
-                        if current_section:
-                            result[current_section] = "\n\n".join(current_content)
-                        current_section = section
-                        content_after_prefix = line[len(prefix):].strip()
-                        if content_after_prefix:
-                            current_content = [content_after_prefix]
-                        else:
-                            current_content = []
-                        matched = True
-                        break
-                if matched:
-                    break
-
-                line_clean = re.sub(r'[\s\d、]', '', line)
-                if line_clean.startswith(section_clean) and '：' in line:
-                    if current_section:
-                        result[current_section] = "\n\n".join(current_content)
-                    current_section = section
-                    colon_idx = line.index('：')
-                    content_after_colon = line[colon_idx + 1:].strip()
-                    if content_after_colon:
-                        current_content = [content_after_colon]
-                    else:
-                        current_content = []
-                    matched = True
-                    break
-
-            if not matched and current_section:
-                if line:
-                    current_content.append(line)
-
-        if current_section:
-            result[current_section] = "\n\n".join(current_content)
-
-        for section in outline:
-            if section not in result or not result[section]:
-                result[section] = f"关于{section}的详细内容，请参考原始素材。"
-
-        return result
-
-    async def execute(self, plan: Plan, callback_url: str = "") -> Plan:
+    async def execute(self, plan: Plan, callback_url: str = "",
+                       previous_doc_content: str = "", previous_ppt_content: str = "",
+                       session_id: str = "") -> Plan:
         if not callback_url:
             for step in plan.steps:
                 step.status = "completed"
             return plan
 
-        result_data = {}
-        for step in plan.steps:
-            step.status = "running"
-            await self._notify(callback_url, plan, step)
+        pipeline_context: dict[str, Any] = {}
 
-            try:
-                if plan.task == "generate_ppt":
-                    result_data = await self._handle_generate_ppt_step(step, plan.message, result_data)
-                elif plan.task == "generate_doc":
-                    result_data = await self._handle_generate_doc_step(step, plan.message, result_data)
-                else:
-                    await asyncio.sleep(1.5)
+        if plan.task in ("modify_doc",) and previous_doc_content:
+            pipeline_context["_original_doc_content"] = previous_doc_content
+            logger.info("Seeded pipeline with original doc content (%d chars)", len(previous_doc_content))
+        elif plan.task in ("modify_ppt",) and previous_ppt_content:
+            pipeline_context["_original_ppt_content"] = previous_ppt_content
+            logger.info("Seeded pipeline with original PPT content (%d chars)", len(previous_ppt_content))
 
-                step.status = "completed"
-                await self._notify(callback_url, plan, step)
-            except Exception as e:
-                logger.error("Step %s failed: %s", step.step, e)
-                step.status = "failed"
-                await self._notify(callback_url, plan, step)
-                break
+        chat_history_text = self._load_chat_history(session_id)
+        if chat_history_text:
+            pipeline_context["_chat_history"] = chat_history_text
+            logger.info("Loaded chat history for session %s (%d chars)", session_id, len(chat_history_text))
 
-        if result_data.get("file_path"):
-            plan.result = {
-                "file_name": os.path.basename(result_data["file_path"]),
-                "file_size": os.path.getsize(result_data["file_path"]),
-                "download_url": f"/download/{os.path.basename(result_data['file_path'])}"
-            }
+        step_map: dict[str, PlanStep] = {s.step: s for s in plan.steps}
+        dependencies: dict[str, list[str]] = {}
+        dependents: dict[str, list[str]] = {}
+
+        for s in plan.steps:
+            deps = s.depends_on if s.depends_on else self._infer_deps(s, plan.steps)
+            dependencies[s.step] = [d for d in deps if d in step_map]
+            for d in dependencies[s.step]:
+                dependents.setdefault(d, []).append(s.step)
+
+        ready = deque()
+        pending_count: dict[str, int] = {}
+        for s in plan.steps:
+            pending_count[s.step] = len(dependencies[s.step])
+            if pending_count[s.step] == 0 and s.status == "pending":
+                ready.append(s)
+
+        if not ready:
+            logger.warning("No ready steps found; possible circular dependency")
+            for s in plan.steps:
+                if s.status == "pending":
+                    s.status = "failed"
+            return plan
+
+        skipped: set[str] = set()
+
+        while ready:
+            wave = list(ready)
+            ready.clear()
+
+            wave_tasks = []
+            for step in wave:
+                wave_tasks.append(self._execute_step(step, plan, pipeline_context, callback_url))
+
+            results = await asyncio.gather(*wave_tasks, return_exceptions=True)
+
+            for i, result in enumerate(results):
+                step = wave[i]
+                if isinstance(result, Exception):
+                    logger.error("Step %s raised exception: %s", step.step, result)
+                    step.status = "failed"
+                    await self._notify(callback_url, plan, step)
+                    self._handle_failure(step, step_map, ready, pending_count, skipped)
+                    continue
+
+                if result == "skipped":
+                    skipped.add(step.step)
+                    continue
+
+                for dep in dependents.get(step.step, []):
+                    pending_count[dep] -= 1
+                    if pending_count[dep] == 0 and step_map[dep].status == "pending":
+                        ready.append(step_map[dep])
+
+        self._attach_result(plan, pipeline_context)
+        await self._notify(callback_url, plan, plan.steps[-1] if plan.steps else None)
         return plan
 
-    async def _handle_generate_ppt_step(self, step, message, result_data):
-        if step.step == "analyze_requirements":
-            result_data["topic"] = message
-            await asyncio.sleep(0.5)
-        elif step.step == "generate_outline":
-            try:
-                raw_output = await self._call_llm(message)
-                logger.info("LLM outline output: %s", raw_output)
+    def _infer_deps(self, step: PlanStep, all_steps: list[PlanStep]) -> list[str]:
+        deps = []
+        idx = None
+        for i, s in enumerate(all_steps):
+            if s.step == step.step:
+                idx = i
+                break
+        if idx is not None and idx > 0:
+            deps.append(all_steps[idx - 1].step)
+        return deps
 
-                ppt_data = self._parse_json(raw_output)
-                if ppt_data is None:
-                    raise ValueError("Failed to parse LLM output as JSON")
+    async def _execute_step(
+        self, step: PlanStep, plan: Plan, pipeline: dict[str, Any], callback_url: str,
+    ) -> str:
+        if step.condition:
+            ok = self._eval_condition(step.condition, pipeline)
+            if not ok:
+                step.status = "skipped"
+                await self._notify(callback_url, plan, step)
+                logger.info("Step %s skipped: condition '%s' not met", step.step, step.condition)
+                return "skipped"
 
-                result_data["outline"] = ppt_data.get("outline", [])
-                result_data["slides_content"] = ppt_data.get("slides_content", [])
-                logger.info("Generated %d outline items, %d slides", len(result_data["outline"]), len(result_data["slides_content"]))
-            except Exception as e:
-                logger.error("Failed to generate outline: %s", e)
-                result_data["outline"] = ["封面页", "目录页", "内容页1", "内容页2", "总结页"]
-                result_data["slides_content"] = [{"title": "封面页", "content": message}]
-            await asyncio.sleep(1)
-        elif step.step == "generate_slides":
-            if not result_data.get("slides_content"):
-                try:
-                    raw_output = await self._call_llm(message)
-                    logger.info("LLM slides output: %s", raw_output)
+        step.status = "running"
+        await self._notify(callback_url, plan, step)
 
-                    ppt_data = self._parse_json(raw_output)
-                    if ppt_data is None:
-                        raise ValueError("Failed to parse LLM output as JSON")
-
-                    result_data["slides_content"] = ppt_data.get("slides_content", [])
-                except Exception as e:
-                    logger.error("Failed to generate slides: %s", e)
-                    result_data["slides_content"] = [{"title": "内容页", "content": message}]
-            await asyncio.sleep(1.5)
-        elif step.step == "build_ppt":
-            slides_content = result_data.get("slides_content", [])
-            if not slides_content:
-                slides_content = [{"title": "主题", "content": message}]
-            file_path = PPTGenerator.generate_ppt(result_data["topic"], slides_content)
-            result_data["file_path"] = file_path
-        return result_data
-
-    async def _handle_generate_doc_step(self, step, message, result_data):
-        if step.step == "analyze_requirements":
-            result_data["topic"] = self._extract_title_from_content(message)
-            await asyncio.sleep(1)
-        elif step.step == "generate_outline":
-            outline_from_content = self._extract_outline_from_content(message)
-            if outline_from_content:
-                result_data["outline"] = outline_from_content
+        try:
+            enriched_args = self._enrich_args(step.args, pipeline)
+            tool = ToolRegistry.get(step.tool) if step.tool else None
+            if tool:
+                result = await tool.execute(step, {
+                    "task": plan.task,
+                    "message": plan.message,
+                    "plan": plan,
+                    "args": enriched_args,
+                })
+                step.status = result.get("status", "completed")
+                output = result.get("output", "")
+                if output:
+                    pipeline[step.step] = output
+                slides_data = result.get("slides_data")
+                if slides_data:
+                    pipeline[step.step + "_slides_data"] = slides_data
+                deliverables = result.get("deliverables")
+                if deliverables:
+                    pipeline["_deliverables"] = deliverables
+                delivery_content = result.get("delivery_content")
+                if delivery_content:
+                    pipeline["_delivery_content"] = delivery_content
+                logger.info(
+                    "Step %s executed by %s → %s (output: %d chars)",
+                    step.step, tool.__class__.__name__, step.status, len(str(output)),
+                )
             else:
-                result_data["outline"] = [
-                    "1. 文档概述",
-                    "2. 背景介绍",
-                    "3. 核心内容",
-                    "4. 实施方案",
-                    "5. 效果评估",
-                    "6. 总结与展望"
-                ]
-            await asyncio.sleep(1.5)
-        elif step.step == "generate_content":
-            try:
-                raw_output = await self._call_llm_doc(message, result_data.get("outline", []))
-                logger.info("LLM doc content output: %s", raw_output)
-                result_data["content"] = self._parse_doc_content(raw_output, result_data.get("outline", []))
-            except Exception as e:
-                logger.error("Failed to generate doc content: %s", e)
-                result_data["content"] = {}
-                for section in result_data.get("outline", []):
-                    result_data["content"][section] = f"这是{section}的详细内容，基于您提供的主题生成。"
-            await asyncio.sleep(2)
-        elif step.step == "format_doc":
-            file_path = DocGenerator.generate_doc(result_data["topic"], result_data["content"])
-            result_data["file_path"] = file_path
-        return result_data
+                await asyncio.sleep(1.5)
+                step.status = "completed"
+                logger.info("Step %s executed (fallback sleep, no tool=%s)", step.step, step.tool or "(none)")
 
-    def _extract_outline_from_content(self, content: str) -> list:
-        lines = content.split("\n")
-        outline = []
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith("#") or line.startswith("一、") or line.startswith("二、") or line.startswith("三、") or line.startswith("四、") or line.startswith("五、") or line.startswith("六、"):
-                if line.startswith("#"):
-                    clean_title = line.lstrip("#").strip()
+            await self._notify(callback_url, plan, step)
+            return "completed"
+        except Exception as e:
+            logger.error("Step %s failed: %s", step.step, e)
+            step.status = "failed"
+            await self._notify(callback_url, plan, step)
+            raise
+
+    def _handle_failure(
+        self, step: PlanStep, step_map: dict[str, PlanStep],
+        ready: deque, pending_count: dict[str, int], skipped: set[str],
+    ) -> None:
+        if not step.on_failure:
+            return
+
+        recovery_step = step_map.get(step.on_failure)
+        if not recovery_step:
+            logger.warning("on_failure target '%s' not found for step '%s'", step.on_failure, step.step)
+            return
+
+        if recovery_step.status != "pending":
+            return
+
+        deps_met = True
+        for dep in recovery_step.depends_on:
+            dep_step = step_map.get(dep)
+            if not dep_step or dep_step.status not in ("completed", "skipped"):
+                deps_met = False
+                break
+
+        if deps_met:
+            logger.info("Failure branch: step '%s' failed → enqueuing '%s'", step.step, step.on_failure)
+            ready.append(recovery_step)
+            pending_count[recovery_step.step] = 0
+
+    def _eval_condition(self, condition: str, pipeline: dict[str, Any]) -> bool:
+        if not condition or not condition.strip():
+            return True
+
+        expr = condition.strip()
+        negate = False
+        if expr.startswith("!"):
+            negate = True
+            expr = expr[1:]
+
+        parts = expr.split(".", 1)
+        step_name = parts[0]
+        check = parts[1] if len(parts) > 1 else "completed"
+
+        if check == "completed":
+            result = step_name in pipeline and bool(pipeline[step_name])
+        elif check == "failed":
+            result = step_name not in pipeline or not pipeline[step_name]
+        elif check == "output":
+            result = step_name in pipeline and bool(pipeline.get(step_name))
+        else:
+            result = step_name in pipeline
+
+        return not result if negate else result
+
+    def _load_chat_history(self, session_id: str) -> str:
+        if not session_id:
+            return ""
+
+        try:
+            history = get_chat_history(session_id)
+            if history is None:
+                return ""
+
+            messages = history.messages
+            if not messages:
+                return ""
+
+            recent = messages[-(MAX_HISTORY_ROUNDS * 2):]
+            lines: list[str] = []
+            for i, msg in enumerate(recent):
+                role = "用户" if msg.type == "human" else "AI"
+                lines.append(f"[{i + 1}] {role}: {msg.content}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning("Failed to load chat history for session %s: %s", session_id, e)
+            return ""
+
+    def _enrich_args(self, step_args: dict[str, Any], pipeline_context: dict[str, Any]) -> dict[str, Any]:
+        enriched = dict(step_args)
+        enriched["_pipeline"] = dict(pipeline_context)
+        return enriched
+
+    def _attach_result(self, plan: Plan, pipeline_context: dict[str, Any]) -> None:
+        deliverables = pipeline_context.get("_deliverables")
+        delivery_content = pipeline_context.get("_delivery_content")
+
+        if deliverables:
+            plan.result = {"deliverables": deliverables}
+            if delivery_content:
+                plan.result["generated_content"] = delivery_content
+        else:
+            for key in ("build_ppt", "build_doc", "format_doc"):
+                file_path = pipeline_context.get(key, "")
+                if file_path and os.path.isfile(file_path):
+                    plan.result = {
+                        "file_name": os.path.basename(file_path),
+                        "file_size": os.path.getsize(file_path),
+                        "download_url": f"/download/{os.path.basename(file_path)}",
+                    }
+                    break
+
+        if plan.task == "summarize_meeting":
+            content = delivery_content or pipeline_context.get("generate_summary") or ""
+            if content:
+                if not plan.result:
+                    plan.result = {}
+                plan.result["generated_content"] = content
+        elif plan.task in ("generate_doc", "modify_doc"):
+            content = delivery_content or pipeline_context.get("generate_content") or pipeline_context.get("merge_content") or ""
+            if content and plan.result:
+                plan.result["generated_content"] = content
+            elif content:
+                plan.result = {"generated_content": content}
+        elif plan.task in ("generate_ppt", "modify_ppt"):
+            outline = pipeline_context.get("generate_outline", "")
+            slides = pipeline_context.get("generate_slides", "")
+            merged = pipeline_context.get("merge_content", "")
+            ppt_content = delivery_content or merged or (outline + "\n\n" + slides if outline or slides else "")
+            if ppt_content and plan.result:
+                plan.result["generated_content"] = ppt_content
+            elif ppt_content:
+                plan.result = {"generated_content": ppt_content}
+
+            slides_data = pipeline_context.get("build_ppt_slides_data")
+            if slides_data:
+                if plan.result:
+                    plan.result["slides_data"] = slides_data
                 else:
-                    clean_title = line
-                if clean_title and clean_title not in outline:
-                    outline.append(clean_title)
-        return outline
+                    plan.result = {"slides_data": slides_data}
 
-    def _extract_title_from_content(self, content: str) -> str:
-        lines = content.split("\n")
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith("#"):
-                continue
-            if len(line) <= 50:
-                return line
-        return "文档"
+        if plan.result:
+            logger.info("Plan result attached: %s", plan.result)
 
     async def _notify(self, callback_url: str, plan: Plan, current_step):
         try:

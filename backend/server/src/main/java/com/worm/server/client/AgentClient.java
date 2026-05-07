@@ -35,7 +35,8 @@ public class AgentClient {
         }
 
         public CompletableFuture<AgentResponse> process(String message, String sessionId, List<String> mentions,
-                        String pendingTask, Map<String, String> collectedInfo, boolean inInfoCollection) {
+                        String pendingTask, Map<String, String> collectedInfo, boolean inInfoCollection,
+                        String previousDocContent, String previousPptContent, String chatHistory) {
                 logger.info("Sending to agent: message={}, sessionId={}, mentions={}, pendingTask={}, inInfoCollection={}",
                                 message, sessionId, mentions, pendingTask, inInfoCollection);
 
@@ -54,6 +55,15 @@ public class AgentClient {
                         body.put("collected_info", collectedInfo);
                 }
                 body.put("in_info_collection", inInfoCollection);
+                if (previousDocContent != null && !previousDocContent.isBlank()) {
+                        body.put("previous_doc_content", previousDocContent);
+                }
+                if (previousPptContent != null && !previousPptContent.isBlank()) {
+                        body.put("previous_ppt_content", previousPptContent);
+                }
+                if (chatHistory != null && !chatHistory.isBlank()) {
+                        body.put("chat_history", chatHistory);
+                }
 
                 return webClient.post()
                                 .uri("/agent/process")
@@ -61,10 +71,14 @@ public class AgentClient {
                                 .bodyValue(body)
                                 .retrieve()
                                 .bodyToMono(AgentResponse.class)
-                                .doOnSuccess(response -> logger.info("Agent response: type={}, content={}, requiresConfirmation={}, suggestedTask={}",
+                                .doOnSuccess(response -> logger.info(
+                                                "Agent response: type={}, content={}, requiresConfirmation={}, suggestedTask={}",
                                                 response.getType(), response.getContent(),
-                                                response.getMeta() != null ? response.getMeta().getRequiresConfirmation() : null,
-                                                response.getMeta() != null ? response.getMeta().getSuggestedTask() : null))
+                                                response.getMeta() != null
+                                                                ? response.getMeta().getRequiresConfirmation()
+                                                                : null,
+                                                response.getMeta() != null ? response.getMeta().getSuggestedTask()
+                                                                : null))
                                 .doOnError(WebClientResponseException.class,
                                                 ex -> logger.warn("Agent returned status {}: {}", ex.getStatusCode(),
                                                                 ex.getResponseBodyAsString()))
@@ -106,9 +120,10 @@ public class AgentClient {
                                 .toFuture();
         }
 
-        public CompletableFuture<PlanResponse> execute(PlanResponse plan, String sessionId) {
+        public CompletableFuture<PlanResponse> execute(PlanResponse plan, String sessionId,
+                        String previousDocContent, String previousPptContent) {
                 logger.info("Executing plan: task={}, steps={}, sessionId={}",
-                        plan.getTask(), plan.getSteps() != null ? plan.getSteps().size() : 0, sessionId);
+                                plan.getTask(), plan.getSteps() != null ? plan.getSteps().size() : 0, sessionId);
 
                 Map<String, Object> body = new HashMap<>();
                 body.put("task", plan.getTask());
@@ -117,6 +132,12 @@ public class AgentClient {
                 body.put("callback_url", "http://localhost:8080/api/agent/progress");
                 if (sessionId != null && !sessionId.isBlank()) {
                         body.put("session_id", sessionId);
+                }
+                if (previousDocContent != null && !previousDocContent.isBlank()) {
+                        body.put("previous_doc_content", previousDocContent);
+                }
+                if (previousPptContent != null && !previousPptContent.isBlank()) {
+                        body.put("previous_ppt_content", previousPptContent);
                 }
 
                 return webClient.post()

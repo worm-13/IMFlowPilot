@@ -9,6 +9,9 @@ class PlanStep:
     status: str = "pending"
     tool: str = ""
     args: dict[str, Any] = field(default_factory=dict)
+    depends_on: list[str] = field(default_factory=list)
+    condition: str = ""
+    on_failure: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -17,6 +20,9 @@ class PlanStep:
             "status": self.status,
             "tool": self.tool,
             "args": self.args,
+            "depends_on": self.depends_on,
+            "condition": self.condition,
+            "on_failure": self.on_failure,
         }
 
     @classmethod
@@ -27,6 +33,9 @@ class PlanStep:
             status=data.get("status", "pending"),
             tool=data.get("tool", ""),
             args=data.get("args", {}),
+            depends_on=data.get("depends_on", []),
+            condition=data.get("condition", ""),
+            on_failure=data.get("on_failure", ""),
         )
 
 
